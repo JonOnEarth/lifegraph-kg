@@ -1,0 +1,31 @@
+lifegraph-kg
+Copyright 2026 The lifegraph-kg contributors
+
+This product includes software developed at github.com/lifegraph-os/lifegraph-kg.
+
+Licensed under the Apache License, Version 2.0. See LICENSE for the full text.
+
+The default life schema and hygiene patterns originate from the LifeGraph
+application (private predecessor at github.com/JonOnEarth/lifegraph), and are
+released here under the same Apache-2.0 terms.
+
+This work draws conceptual influence from prior art (cited in the README) but
+is an independent implementation:
+
+  - Conway, M. A. (2000). The construction of autobiographical memories
+    in the self-memory system. Psychological Review, 107(2), 261–288.
+  - Pink, M., et al. (2025). "Position: Episodic Memory is the Missing Piece
+    for Long-Term LLM Agents." arXiv:2502.06975.
+  - Sumers, T. R., et al. (2023). "Cognitive Architectures for Language
+    Agents (CoALA)." arXiv:2309.02427.
+  - Zep / Graphiti (https://github.com/getzep/graphiti) — episode model
+    and bi-temporal edge invalidation are independently re-implemented;
+    Graphiti is Apache-2.0.
+  - Google LangExtract (https://github.com/google/langextract) — the
+    examples=[...] few-shot authoring surface and char_interval grounding
+    pattern are independently re-implemented; LangExtract is Apache-2.0.
+
+The name "LifeGraph" was previously used in:
+  - Tominski, H., & Aigner, W. (2020). "LifeGraph: A Visual Analytics
+    System for Personal Data." (ACM)
+This package is unrelated to that research artifact.

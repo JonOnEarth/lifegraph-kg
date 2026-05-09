@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: set up python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: install dependencies
+        run: uv sync --extra dev
+
+      - name: lint (ruff)
+        run: uv run ruff check .
+
+      - name: format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: type check (mypy)
+        run: uv run mypy lifegraph_kg
+
+      - name: test (pytest)
+        run: uv run pytest --cov=lifegraph_kg --cov-report=term-missing
+
+  license-check:
+    name: license compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: verify LICENSE present
+        run: test -f LICENSE && grep -q "Apache License" LICENSE
+
+      - name: verify NOTICE present
+        run: test -f NOTICE

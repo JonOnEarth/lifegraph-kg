@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lifegraph-kg"
+version = "0.0.1"
+description = "Autobiographical memory engine — typed schema with default life classes, indexed by time, place, and person."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "lifegraph-kg contributors" }]
+keywords = [
+    "autobiographical-memory",
+    "knowledge-graph",
+    "memory",
+    "extraction",
+    "agent-memory",
+    "ontology",
+    "life-log",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.7",
+    "anthropic>=0.40",
+]
+
+[project.optional-dependencies]
+hygiene = [
+    "sentence-transformers>=3.0",
+    "numpy>=1.26",
+]
+postgres = [
+    "psycopg[binary]>=3.2",
+]
+kuzu = [
+    "kuzu>=0.6",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "hypothesis>=6",
+]
+
+[project.urls]
+Homepage = "https://github.com/lifegraph-os/lifegraph-kg"
+Issues = "https://github.com/lifegraph-os/lifegraph-kg/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lifegraph_kg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "B", "UP", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
