@@ -1,0 +1,58 @@
+{
+  "id": "temporal-supersede-001",
+  "description": "Sara moves from Berlin to Tokyo; the lives_in edge supersedes (invalidate-not-delete). Time-travel queries return the right answer at each point.",
+  "category": "temporal",
+  "history": [
+    {
+      "at": "2025-06-01T09:00:00Z",
+      "text": "Sara lives in Berlin.",
+      "expected_facts": [
+        {
+          "type": "lives_in",
+          "from_entity": ["Person", "sara"],
+          "to_entity":   ["Place",  "berlin"],
+          "t_event":     "2025-06-01T09:00:00Z",
+          "t_ingestion": "2025-06-01T09:00:00Z",
+          "t_valid":     "2025-06-01T09:00:00Z",
+          "t_invalid":    null
+        }
+      ]
+    },
+    {
+      "at": "2026-01-15T18:00:00Z",
+      "text": "Sara moved to Tokyo.",
+      "expected_facts": [
+        {
+          "type": "lives_in",
+          "from_entity": ["Person", "sara"],
+          "to_entity":   ["Place",  "tokyo"],
+          "t_event":     "2026-01-15T18:00:00Z",
+          "t_ingestion": "2026-01-15T18:00:00Z",
+          "t_valid":     "2026-01-15T18:00:00Z",
+          "t_invalid":    null
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "as_of": "2025-12-01T00:00:00Z",
+      "subject":   ["Person", "sara"],
+      "predicate": "lives_in",
+      "expected_object": ["Place", "berlin"]
+    },
+    {
+      "as_of": "2026-03-01T00:00:00Z",
+      "subject":   ["Person", "sara"],
+      "predicate": "lives_in",
+      "expected_object": ["Place", "tokyo"]
+    },
+    {
+      "as_of": "2025-01-01T00:00:00Z",
+      "subject":   ["Person", "sara"],
+      "predicate": "lives_in",
+      "expected_object": null
+    }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "Canonical Graphiti-style supersede scenario." }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "extraction-basic-001",
+  "description": "Single sentence with one Person, one Place, one Activity, one Food",
+  "category": "extraction",
+  "input_text": "Had ramen with Sara at Ippudo.",
+  "expected_entities": [
+    { "type": "Person",   "key": "sara",   "value": "Sara" },
+    { "type": "Place",    "key": "ippudo", "value": "Ippudo" },
+    { "type": "Activity", "key": "eat",    "value": "Had" },
+    { "type": "Food",     "key": "ramen",  "value": "ramen" }
+  ],
+  "expected_groundings": [
+    { "entity_type": "Activity", "entity_key": "eat",    "span": { "start": 0,  "end": 3  } },
+    { "entity_type": "Food",     "entity_key": "ramen",  "span": { "start": 4,  "end": 9  } },
+    { "entity_type": "Person",   "entity_key": "sara",   "span": { "start": 15, "end": 19 } },
+    { "entity_type": "Place",    "entity_key": "ippudo", "span": { "start": 23, "end": 29 } }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "" }
+}

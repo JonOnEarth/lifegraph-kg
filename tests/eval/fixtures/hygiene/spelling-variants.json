@@ -1,0 +1,33 @@
+{
+  "id": "hygiene-spelling-001",
+  "description": "Common spelling/casing variants of the same person should merge; unrelated people with similar names should NOT merge.",
+  "category": "hygiene",
+  "pairs": [
+    {
+      "a": { "type": "Person", "key": "sara",  "value": "Sara" },
+      "b": { "type": "Person", "key": "sarah", "value": "Sarah" },
+      "should_merge": true
+    },
+    {
+      "a": { "type": "Person", "key": "alex",  "value": "Alex" },
+      "b": { "type": "Person", "key": "alex",  "value": "alex" },
+      "should_merge": true
+    },
+    {
+      "a": { "type": "Person", "key": "alex-smith",   "value": "Alex Smith" },
+      "b": { "type": "Person", "key": "alex-johnson", "value": "Alex Johnson" },
+      "should_merge": false
+    },
+    {
+      "a": { "type": "Place", "key": "ippudo",     "value": "Ippudo" },
+      "b": { "type": "Place", "key": "ippudo-nyc", "value": "Ippudo NYC" },
+      "should_merge": true
+    },
+    {
+      "a": { "type": "Place", "key": "ippudo",   "value": "Ippudo" },
+      "b": { "type": "Place", "key": "ichiran",  "value": "Ichiran" },
+      "should_merge": false
+    }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "Mix of true positives and adversarial negatives." }
+}

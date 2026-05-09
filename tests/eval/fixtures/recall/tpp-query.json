@@ -1,0 +1,66 @@
+{
+  "id": "recall-tpp-001",
+  "description": "Five episodes spanning two people and two places; queries by time, place, person, and combinations.",
+  "category": "recall",
+  "corpus": [
+    {
+      "id": "ep-001",
+      "text": "Had ramen with Sara at Ippudo.",
+      "occurred_at":  "2026-04-12T19:00:00Z",
+      "ingested_at":  "2026-04-12T19:05:00Z",
+      "source": "telegram"
+    },
+    {
+      "id": "ep-002",
+      "text": "Coffee with Alex at Blue Bottle, talked about the album launch.",
+      "occurred_at":  "2026-04-15T10:00:00Z",
+      "ingested_at":  "2026-04-15T10:02:00Z",
+      "source": "telegram"
+    },
+    {
+      "id": "ep-003",
+      "text": "Dinner at Ippudo again, this time alone.",
+      "occurred_at":  "2026-05-01T20:00:00Z",
+      "ingested_at":  "2026-05-01T20:30:00Z",
+      "source": "voice"
+    },
+    {
+      "id": "ep-004",
+      "text": "Met Sara for tea after work.",
+      "occurred_at":  "2026-05-03T17:00:00Z",
+      "ingested_at":  "2026-05-03T17:01:00Z",
+      "source": "telegram"
+    },
+    {
+      "id": "ep-005",
+      "text": "Album launch party at Blue Bottle.",
+      "occurred_at":  "2026-05-08T19:00:00Z",
+      "ingested_at":  "2026-05-08T19:30:00Z",
+      "source": "telegram"
+    }
+  ],
+  "queries": [
+    {
+      "description": "All episodes mentioning Sara",
+      "person_key": "sara",
+      "expected_episode_ids": ["ep-004", "ep-001"]
+    },
+    {
+      "description": "All episodes at Ippudo",
+      "place_key": "ippudo",
+      "expected_episode_ids": ["ep-003", "ep-001"]
+    },
+    {
+      "description": "Sara at Ippudo (compound TPP)",
+      "person_key": "sara",
+      "place_key":  "ippudo",
+      "expected_episode_ids": ["ep-001"]
+    },
+    {
+      "description": "Anything in May 2026",
+      "time_range": ["2026-05-01T00:00:00Z", "2026-05-31T23:59:59Z"],
+      "expected_episode_ids": ["ep-005", "ep-004", "ep-003"]
+    }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "Expected episode_ids ordered most-relevant-first (typically reverse-chronological for ties)." }
+}

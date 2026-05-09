@@ -53,3 +53,39 @@ jobs:
 
       - name: verify NOTICE present
         run: test -f NOTICE
+
+  evals:
+    name: evals (validate fixtures + run not-yet-implemented gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: set up python
+        run: uv python install 3.13
+
+      - name: install dependencies
+        run: uv sync --extra dev
+
+      - name: validate fixtures
+        # Confirms every fixture loads against its Pydantic schema.
+        run: uv run python -m tests.eval.runners.run_all --validate-only
+
+      - name: run eval gate
+        # Until L1+ ships, this asserts every category returns
+        # "not_yet_implemented" or "pass" (CI gate). Once a phase lands,
+        # it must keep passing.
+        run: uv run python -m tests.eval.runners.run_all
+          --output tests/eval/reports/ci-${{ github.sha }}.json
+
+      - name: upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.sha }}
+          path: tests/eval/reports/ci-${{ github.sha }}.json
+          retention-days: 30

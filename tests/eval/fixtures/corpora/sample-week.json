@@ -1,0 +1,16 @@
+{
+  "id": "corpus-sample-week-001",
+  "description": "One week of synthetic life-log entries for end-to-end testing — small enough to read, varied enough to exercise extraction + temporal + recall together.",
+  "episodes": [
+    { "id": "w-mon-am",   "text": "Standup at 9. Reviewed PR with Priya.",                              "occurred_at": "2026-05-04T09:30:00Z", "ingested_at": "2026-05-04T09:35:00Z", "source": "voice"    },
+    { "id": "w-mon-pm",   "text": "Ramen at Ichiran for lunch. Worked late on the launch deck.",      "occurred_at": "2026-05-04T13:00:00Z", "ingested_at": "2026-05-04T22:00:00Z", "source": "telegram" },
+    { "id": "w-tue-am",   "text": "Coffee with Alex at Blue Bottle. Felt energized.",                 "occurred_at": "2026-05-05T08:30:00Z", "ingested_at": "2026-05-05T08:32:00Z", "source": "telegram" },
+    { "id": "w-tue-pm",   "text": "Long focus block on the extractor. Skipped lunch.",                "occurred_at": "2026-05-05T11:00:00Z", "ingested_at": "2026-05-05T18:00:00Z", "source": "voice"    },
+    { "id": "w-wed-am",   "text": "Sara called about the Tokyo apartment hunt.",                      "occurred_at": "2026-05-06T11:00:00Z", "ingested_at": "2026-05-06T11:05:00Z", "source": "telegram" },
+    { "id": "w-wed-pm",   "text": "Had ramen with Sara at Ippudo. Bumi (cat) was being weird.",       "occurred_at": "2026-05-06T19:00:00Z", "ingested_at": "2026-05-06T20:00:00Z", "source": "telegram" },
+    { "id": "w-thu",      "text": "All-day workshop on autobiographical memory frameworks.",          "occurred_at": "2026-05-07T09:00:00Z", "ingested_at": "2026-05-07T18:00:00Z", "source": "voice"    },
+    { "id": "w-fri-am",   "text": "Standup. Closed three issues. Felt productive.",                   "occurred_at": "2026-05-08T09:30:00Z", "ingested_at": "2026-05-08T09:35:00Z", "source": "voice"    },
+    { "id": "w-fri-pm",   "text": "Album launch party at Blue Bottle. Saw Alex and Priya.",           "occurred_at": "2026-05-08T19:00:00Z", "ingested_at": "2026-05-08T23:00:00Z", "source": "telegram" }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "Reused across multiple end-to-end runners." }
+}

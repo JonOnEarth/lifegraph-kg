@@ -1,0 +1,21 @@
+{
+  "id": "extraction-multi-001",
+  "description": "Compound sentence with multiple people, a place, and a project mention",
+  "category": "extraction",
+  "input_text": "Met Alex and Priya at the studio to plan the album launch.",
+  "expected_entities": [
+    { "type": "Person",   "key": "alex",  "value": "Alex" },
+    { "type": "Person",   "key": "priya", "value": "Priya" },
+    { "type": "Place",    "key": "studio", "value": "studio" },
+    { "type": "Activity", "key": "meet",   "value": "Met" },
+    { "type": "Project",  "key": "album-launch", "value": "album launch" }
+  ],
+  "expected_groundings": [
+    { "entity_type": "Activity", "entity_key": "meet",   "span": { "start": 0,  "end": 3  } },
+    { "entity_type": "Person",   "entity_key": "alex",   "span": { "start": 4,  "end": 8  } },
+    { "entity_type": "Person",   "entity_key": "priya",  "span": { "start": 13, "end": 18 } },
+    { "entity_type": "Place",    "entity_key": "studio", "span": { "start": 26, "end": 32 } },
+    { "entity_type": "Project",  "entity_key": "album-launch", "span": { "start": 45, "end": 57 } }
+  ],
+  "metadata": { "source": "synthetic", "license": "Apache-2.0", "notes": "" }
+}
