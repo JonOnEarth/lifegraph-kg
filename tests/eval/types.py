@@ -86,14 +86,24 @@ class FixtureMetadata(BaseModel):
 
 
 class ExtractionFixture(BaseModel):
-    """Input: a piece of text. Expected: entities + groundings."""
+    """Input: a piece of text. Expected: predicates + entities + episode metadata.
+
+    Updated to the v6 schema (4-class ontology, predicates as a list,
+    affect as Episode metadata). Old fixtures with only `expected_entities`
+    still validate — predicates/body_state/sentiment/energy default to
+    empty/null.
+    """
 
     id: str
     description: str
     category: Literal["extraction"] = "extraction"
     input_text: str
+    expected_predicates: list[str] = Field(default_factory=list)
+    expected_body_state: str | None = None
+    expected_sentiment: Literal["pos", "neu", "neg"] | None = None
+    expected_energy: Literal["high", "medium", "low"] | None = None
     expected_entities: list[Entity]
-    expected_groundings: list[Grounding]
+    expected_groundings: list[Grounding] = Field(default_factory=list)
     metadata: FixtureMetadata = Field(default_factory=FixtureMetadata)
 
 

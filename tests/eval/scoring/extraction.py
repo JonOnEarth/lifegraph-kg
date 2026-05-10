@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Extraction quality metrics.
 
-Three things to measure for ``lg.log(text)``:
+Five things to measure for ``lg.log(text)`` under the v6 ontology:
 
 1. Entity F1 — micro-averaged precision/recall/F1 of (type, key) tuples.
 2. Type accuracy — when an entity is matched by key, is its type right?
 3. Grounding IoU — for matched entities, how well do char-intervals align?
+4. Predicate F1 — for the multi-predicate list (since v6, verbs are
+   predicates not Activity entities).
+5. Episode-metadata accuracy — body_state, sentiment, energy match.
 """
 
 from __future__ import annotations
@@ -110,4 +113,62 @@ def grounding_iou(
         "grounding_iou": sum(ious) / len(ious) if ious else 0.0,
         "matched": float(len(ious) - missed),
         "missed": float(missed),
+    }
+
+
+def predicate_f1(predicted: list[str], golden: list[str]) -> dict[str, float]:
+    """Set-overlap F1 over predicate strings.
+
+    v6 ontology: verbs are normalized to lowercase predicates (e.g. "fixed"
+    for both Chinese 修复 and English 'fixed'). Matching is case-insensitive
+    set comparison — predicate ordering doesn't matter for scoring.
+    """
+    pred_set = {p.lower() for p in predicted}
+    gold_set = {p.lower() for p in golden}
+    tp = len(pred_set & gold_set)
+    fp = len(pred_set - gold_set)
+    fn = len(gold_set - pred_set)
+    p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    r = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+    return {
+        "precision": p,
+        "recall": r,
+        "f1": f,
+        "tp": float(tp),
+        "fp": float(fp),
+        "fn": float(fn),
+    }
+
+
+def episode_metadata_accuracy(
+    predicted_body_state: str | None,
+    predicted_sentiment: str | None,
+    predicted_energy: str | None,
+    golden_body_state: str | None,
+    golden_sentiment: str | None,
+    golden_energy: str | None,
+) -> dict[str, float]:
+    """Per-field exact-match accuracy on episode metadata.
+
+    body_state matches loosely (containment) since the LLM may extract
+    "tired" vs the gold "累了" or vice versa. sentiment/energy are
+    enum-valued and must match exactly.
+    """
+
+    def _body_state_match(p: str | None, g: str | None) -> bool:
+        if p is None and g is None:
+            return True
+        if p is None or g is None:
+            return False
+        return p.lower() in g.lower() or g.lower() in p.lower()
+
+    bs = 1.0 if _body_state_match(predicted_body_state, golden_body_state) else 0.0
+    sent = 1.0 if predicted_sentiment == golden_sentiment else 0.0
+    energy = 1.0 if predicted_energy == golden_energy else 0.0
+    return {
+        "body_state": bs,
+        "sentiment": sent,
+        "energy": energy,
+        "metadata_avg": (bs + sent + energy) / 3,
     }

@@ -1,23 +1,40 @@
 # SPDX-License-Identifier: Apache-2.0
 """lifegraph-kg — autobiographical memory engine.
 
-Public surface (stable from v0.1; pre-alpha until then):
+Public surface (stable from v0.1):
 
     from lifegraph_kg import LifeGraph, classes
+    from lifegraph_kg.classes import Person, Place, Project, Topic
+    from lifegraph_kg.extract import extract
+    from lifegraph_kg.extract.schema import ExtractionResult
 
-The default life schema lives in ``lifegraph_kg.classes``; the knowledge-graph
-facade and storage drivers live in ``lifegraph_kg.kg``; the extractor in
-``lifegraph_kg.extract``; the opt-in hygiene engine in ``lifegraph_kg.hygiene``.
+The 4 default life-classes (Person/Place/Project/Topic) are anchored to
+the canonical PKG ontology — PIMO, Balog & Kenter, Conway's Self-Memory
+System, DOLCE, CIDOC-CRM. See `lifegraph_kg.classes` for the lineage.
 """
 
 from importlib.metadata import PackageNotFoundError, version
+
+from lifegraph_kg import classes
+from lifegraph_kg.classes import Person, Place, Project, Topic
+from lifegraph_kg.extract import extract
+from lifegraph_kg.extract.schema import ExtractionResult
+from lifegraph_kg.kg import LifeGraph
 
 try:
     __version__ = version("lifegraph-kg")
 except PackageNotFoundError:
     __version__ = "0.0.1.dev0"
 
-# Re-exports land here once the modules exist (L1+):
-#   from lifegraph_kg.kg import LifeGraph
-#   from lifegraph_kg import classes
-__all__ = ["__version__"]
+
+__all__ = [
+    "ExtractionResult",
+    "LifeGraph",
+    "Person",
+    "Place",
+    "Project",
+    "Topic",
+    "__version__",
+    "classes",
+    "extract",
+]

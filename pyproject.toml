@@ -70,11 +70,20 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "B", "UP", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# Prompts intentionally contain Chinese punctuation and long JSON example lines
+"lifegraph_kg/extract/prompt.py" = ["RUF001", "E501"]
+# Docstring examples in the facade exceed line length for readability
+"lifegraph_kg/kg/__init__.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 warn_return_any = true
+exclude = [
+    "tests/eval/fixtures/private/",  # gitignored real-data scripts
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

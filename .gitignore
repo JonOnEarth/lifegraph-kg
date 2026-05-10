@@ -52,3 +52,6 @@ me.db
 # Environment
 .env
 .env.local
+
+# Private fixtures (real user data — never committed)
+tests/eval/fixtures/private/
