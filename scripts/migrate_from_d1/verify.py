@@ -49,11 +49,25 @@ def main() -> int:
     print("=" * 70)
     raw_rows = json.loads(args.raw.read_text())
     raw_logs = [r for r in raw_rows if r.get("item_type") == "log"]
+    raw_todos = [r for r in raw_rows if r.get("item_type") == "todo"]
     print(f"Original D1 logs:       {len(raw_logs)}")
+    print(f"Original D1 todos:      {len(raw_todos)}")
 
     sqlstore = lg._store  # type: ignore[attr-defined]
     n_episodes = sqlstore._conn.execute(  # type: ignore[attr-defined]
         "SELECT COUNT(*) FROM episodes"
+    ).fetchone()[0]
+    n_logs = sqlstore._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM episodes WHERE kind = 'log'"
+    ).fetchone()[0]
+    n_tasks = sqlstore._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM episodes WHERE kind = 'task'"
+    ).fetchone()[0]
+    n_tasks_done = sqlstore._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM episodes WHERE kind = 'task' AND status = 'done'"
+    ).fetchone()[0]
+    n_tasks_active = sqlstore._conn.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM episodes WHERE kind = 'task' AND status = 'active'"
     ).fetchone()[0]
     n_entities = sqlstore._conn.execute(  # type: ignore[attr-defined]
         "SELECT COUNT(*) FROM entities"
@@ -64,18 +78,25 @@ def main() -> int:
     n_mentions = sqlstore._conn.execute(  # type: ignore[attr-defined]
         "SELECT COUNT(*) FROM entity_episode_mention"
     ).fetchone()[0]
-    print(f"Migrated episodes:      {n_episodes}")
+    print(f"Migrated episodes:      {n_episodes}  (logs: {n_logs}, tasks: {n_tasks})")
+    if n_tasks > 0:
+        print(f"  task status:          active: {n_tasks_active}, done: {n_tasks_done}")
     print(f"Migrated entities:      {n_entities}")
     print(f"Migrated edges:         {n_edges}")
     print(f"Mention links:          {n_mentions}")
 
-    delta = len(raw_logs) - n_episodes
-    if delta == 0:
-        print("✅ Episode count matches D1 logs.")
-    elif delta > 0:
-        print(f"⚠️  {delta} logs not migrated (errors / empty text / skipped).")
+    log_delta = len(raw_logs) - n_logs
+    todo_delta = len(raw_todos) - n_tasks
+    if log_delta == 0:
+        print(f"✅ Log count matches D1 ({n_logs}).")
     else:
-        print(f"⚠️  Migrated count exceeds D1 logs by {-delta} (?).")
+        print(f"⚠️  {log_delta} logs not migrated.")
+    if todo_delta == 0 and n_tasks > 0:
+        print(f"✅ Task count matches D1 todos ({n_tasks}).")
+    elif n_tasks == 0:
+        print("(i) No tasks migrated yet — run migrate_todos.py.")
+    else:
+        print(f"⚠️  {todo_delta} todos not migrated.")
 
     # --- type / kind distribution ---
     print()
