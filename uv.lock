@@ -640,7 +640,7 @@ wheels = [
 
 [[package]]
 name = "lifegraph-kg"
-version = "0.0.1"
+version = "0.1.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

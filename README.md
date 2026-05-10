@@ -1,110 +1,143 @@
 # lifegraph-kg
 
-> An autobiographical memory engine — typed schema with default life classes, indexed by time, place, and person.
+> A personal knowledge graph for autobiographical data — Person, Place, Project, Topic, Episode — with bi-temporal edges and a built-in hygiene engine.
 
-`lifegraph-kg` is a memory framework for LLM agents that work with **personal lived experience**. It extracts typed entities from natural-language logs, stores them in a knowledge graph with bi-temporal edges, and ships with a built-in hygiene engine for canonicalization and dedup.
+`lifegraph-kg` is a memory framework for LLM agents that work with **personal lived experience**. Type natural-language entries; it extracts typed entities, persists them in a knowledge graph with bi-temporal edges, and ships with a built-in hygiene engine for canonicalization and dedup.
 
-It's distinct from generic agent memory frameworks (Letta, Mem0) and generic agent knowledge graphs (Graphiti) in three ways:
+It targets the canonical PKG ontology established by [PIMO (NEPOMUK)](https://oscaf.sourceforge.net/pimo.html) and [Balog & Kenter (2019)](https://krisztianbalog.com/files/ictir2019-pkg.pdf), with affect/body-state on episodes (Conway's Self-Memory System) — distinct from generic agent-memory frameworks that store "what the agent should remember about a user."
 
-1. **Default life schema.** Out of the box: `Person`, `Place`, `Activity`, `Food`, `Topic`, `Media`, `Health`, `Project`. No Pydantic boilerplate to use the package.
-2. **Autobiographical indices.** Time, place, and person are first-class indices on every memory — matching how humans actually recall lived events (Conway 2000; Pink et al. 2025).
-3. **Hygiene engine.** Canonical IDs, embedding-based dedup, sentiment-aware normalization. The thing that keeps your graph from drifting into noise.
-
-Status: **pre-alpha.** Not yet on PyPI. APIs will change.
+Status: **0.1.0-dev.** Functionally complete, eval-validated, not yet on PyPI.
 
 ## Quickstart
 
 ```python
-from lifegraph_kg import LifeGraph, classes as c
+from datetime import datetime, UTC
+from lifegraph_kg import LifeGraph, Person, Place, Topic
 
-lg = LifeGraph(store="sqlite:///me.db")
-lg.register(c.Person, c.Place, c.Activity, c.Food)
-lg.register_user_class("Pet", parent=c.Entity, fields={"species": str, "name": str})
+# Default: in-memory SQLite. Pass store="sqlite:///me.db" for persistence,
+# or store="postgres://user:pass@host/db" for shared deployments.
+lg = LifeGraph()
 
-# Ingest: stores the episode AND extracts entities AND edges AND grounding
-lg.log("Had ramen with Sara at Ippudo. Bumi (cat) seemed grumpy.",
-       at="2026-05-09T19:00", source="telegram")
+# Ingest: extracts + persists.
+ep = lg.log(
+    "Had ramen with Sara at Ippudo. Felt tired.",
+    occurred_at=datetime(2026, 5, 9, 19, 0, tzinfo=UTC),
+)
+# ep.predicates  → ["ate"]
+# ep.body_state  → "tired"
+# ep.entities are persisted; query them through lg.query()
 
-# Typed entity query
-hits = lg.query(c.Person, name="Sara").related(c.Activity).since("2026-01-01")
+# Query entities
+sara = lg.query(Person, key="sara").one()
+foods = lg.query(Topic, kind="food").all()
 
 # Episode-level recall
-recent = lg.episodes.since("2026-05-01")
-sara_episodes = lg.episodes.mentioning(c.Person, name="Sara")
+sara_episodes = lg.episodes.mentioning(sara)
+last_week = lg.episodes.since(datetime(2026, 5, 1, tzinfo=UTC))
+in_may = lg.episodes.between(may_1, may_31)
+food_timeline = lg.query(Topic, kind="food").episodes()
 
-# Time-travel
-fact = lg.kg.where(c.Person, name="Sara").lives_in.as_of("2025-12-01")  # Berlin
-fact = lg.kg.where(c.Person, name="Sara").lives_in.as_of("now")          # Tokyo
+# Bi-temporal: time-travel queries
+facts_now  = lg.kg.edges_as_of(datetime.now(UTC))
+facts_then = lg.kg.edges_as_of(datetime(2025, 12, 1, tzinfo=UTC))
+
+# Bi-temporal: supersede instead of delete
+lg.kg.invalidate_edge(edge_id, datetime.now(UTC))
+
+# Hygiene: dedup with audit trail
+proposals = lg.hygiene.propose(type_="Person")
+applied   = lg.hygiene.auto_apply()  # only high-confidence merges
 ```
 
-## What it stores (three layers + grounding)
+## Why this and not Graphiti / Mem0 / Letta?
 
-| Layer | What | Why store it |
-|-------|------|--------------|
-| **Episodes** | Raw entries — original text + timestamp + source. | Audit, re-extraction when prompts improve, raw-recall. |
-| **Entities** | Extracted typed nodes (Person:Sara, Place:Ippudo, …). | The typed knowledge graph; what you query against. |
-| **Edges** | Relationships, bi-temporal: event-time `T`, ingestion-time `T'`, validity `(t_valid, t_invalid)`. | The "memory" — what was true when. |
-| **Grounding** | `(entity_id, episode_id, char_start, char_end)` — every entity points back to the source span. | Audit, debug, UI highlights — without this, you have memories you can't trace. |
+Those are excellent. This one targets a different problem.
 
-## Roadmap
+| Goal | Best fit |
+|---|---|
+| Agent memory for a chatbot — preferences, procedures, working set | **Letta**, **Mem0**, **Zep** |
+| Knowledge graph for any agent — bring your own ontology | **Graphiti** |
+| Personal autobiographical knowledge graph — your life, indexed by time/place/person | **lifegraph-kg** |
 
-- **v0.1** — Episodic + semantic memory. The package described above. (in development)
-- **v0.2** — **Procedural memory as human-habit extraction.** "You eat ramen on Tuesdays" mined from the episode stream. Every other framework uses procedural memory for *agent* self-improvement; we use it for *human* habits. This is the long-term differentiator.
-- **v0.3** — Narrative views. Generated stories ("your year in food", "your week with Sara") synthesized from episodes.
-- **TS mirror** — `@lifegraph/kg` on npm, with PGlite as the default storage backend (browser-compatible, pgvector built-in).
+The differentiation is concrete:
+
+- **Default life ontology pre-configured.** Person/Place/Project/Topic with kind discriminators. No Pydantic boilerplate to start.
+- **Bi-temporal edges with audit-preserving supersede.** Same model as Graphiti, but on SQLite-default deploy.
+- **Hygiene engine.** Heuristic dedup with proposal/apply pipeline; the loser entity stays in the DB as an alias (canonical_id), not a deletion. v0.2 adds embedding-based fuzzy match.
+- **Anchored to PKG canon.** The ontology converges on the PIMO classes from 2006 + the [Balog & Kenter 2019](https://krisztianbalog.com/files/ictir2019-pkg.pdf) PKG paper + Conway's Self-Memory System — not invented for this project.
+
+## What gets stored
+
+```text
+Episode  { text, occurred_at, source, predicates: list, body_state, sentiment, energy }
+   │
+   ├─[mentions]─→  Person, Place, Project, Topic{kind}   (4 entity classes)
+   │
+   └─[verb-edges]─→ same entities, bi-temporal:
+                    t_event, t_ingestion, t_valid, t_invalid
+                    (NULL t_invalid = currently valid)
+```
+
+| Layer | Why |
+|-------|-----|
+| **Episode** | The unit of record. DOLCE Perdurant; CIDOC E5 Event; NTCIR Moment; Conway ESK. The text + when + provenance. |
+| **Entities** (Person/Place/Project/Topic) | The typed nodes — what you query against. PIMO + Balog canon. |
+| **Edges** (verb-as-edge) | Bi-temporal; supersede instead of delete; preserves the audit trail. |
+| **`predicates`, `body_state`, `sentiment`, `energy`** | Episode metadata, NOT separate node-classes. Affect is a feature of the episode (Conway), not a participant. |
 
 ## Storage backends
 
-Same SQL across all backends (driver pattern, inspired by Graphiti):
+Same Store protocol across backends. Pick by URI:
 
-| Backend | Status | Notes |
-|---------|--------|-------|
-| SQLite | default | zero-ops, single file, sub-50ms p50 |
-| Postgres | optional | for shared deployments; covers PGlite via PG protocol |
-| Postgres + [Apache AGE](https://age.apache.org) | future (v0.2) | native graph traversal (Cypher path queries) on the same DSN |
-| Neo4j | future | for users coming from Graphiti |
+| Backend | URI | Notes |
+|---|---|---|
+| **SQLite** (default) | `:memory:` or `sqlite:///path` | Zero-ops, single file. stdlib only. |
+| **Postgres** | `postgres://user:pass@host/db` | `pip install 'lifegraph-kg[postgres]'`. Multi-user / shared deployments. PGlite (WASM Postgres) speaks the same protocol. |
+| **Postgres + [Apache AGE](https://age.apache.org)** (v0.2) | same DSN | Native graph traversal — Cypher path queries on the same connection. |
+| **Neo4j** (future) | — | For Graphiti users; depends on demand. |
 
-## Authoring extractions
+## Roadmap
 
-Two paths into the same extractor — pick whichever matches your team:
+- **v0.1** — Extraction + episodic store + bi-temporal CRUD + hygiene engine. **Current state.**
+- **v0.2** — Procedural memory as **human-habit extraction** ("you eat ramen on Tuesdays" mined from the episode stream). The differentiator vs. agent-memory frameworks, which use procedural memory for agent self-improvement. Plus embedding-based fuzzy hygiene.
+- **v0.3** — Narrative views. Generated stories ("your year in food", "your week with Sara") synthesizing episodes.
+- **TS mirror** — `@lifegraph/kg` on npm, with PGlite as the default storage backend (browser-compatible).
 
-**LangExtract-style few-shot (low ceremony, end-user friendly):**
+## Influences (cited inline in source)
 
-```python
-from lifegraph_kg.extract import examples
+| Source | What we took |
+|---|---|
+| **PIMO** (NEPOMUK 2006) | Person/Location/Project/Topic/Event as siblings — the original PKG canon |
+| **Balog & Kenter (2019)** | The 3-class PKG agenda (agents, events, locations); confirmed our 4-class plan as canonical |
+| **Conway's Self-Memory System (2000)** | Autobiographical memory layered as Lifetime Periods → General Events → ESK; affect as episode feature |
+| **DOLCE / CIDOC-CRM** | Endurant/Perdurant split; E21 Person, E53 Place, E5 Event |
+| **Graphiti** (Zep) | Episode model, bi-temporal edge invalidation, multi-backend driver pattern |
+| **LangExtract** (Google) | The few-shot examples authoring surface, character-interval source grounding |
+| **Memori** | The SQL-first thesis: for personal-scale data, p50 latency matters more than cluster scale |
 
-lg.log(text, examples=[
-    examples.ExampleData(
-        text="Met Alex for coffee at Blue Bottle.",
-        extractions=[
-            examples.Extraction(class_=c.Person, text="Alex"),
-            examples.Extraction(class_=c.Place, text="Blue Bottle"),
-            examples.Extraction(class_=c.Activity, text="coffee"),
-        ],
-    ),
-])
+Full lineage in [NOTICE](NOTICE).
+
+## Methodology
+
+The library was built TDD-first against a 6-iteration prompt-engineering cycle on **30 real-data cases**. The locked extractor prompt wins **22-8-0 vs the production legacy extractor** under LLM-as-judge head-to-head, with **0 substring violations** (no translation drift). The eval framework lives in [`tests/eval/`](tests/eval/) and includes scoring functions for extraction quality, bi-temporal CRUD correctness, hygiene precision/recall, recall@K for time/place/person queries, and performance.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the eval workflow.
+
+## Install
+
+```bash
+# v0.1 dev: clone + install via uv
+git clone https://github.com/<your>/lifegraph-kg
+cd lifegraph-kg
+uv sync --extra dev
 ```
 
-**Pydantic schemas (Graphiti-style, type-safe):**
+After PyPI publish (coming soon):
 
-```python
-from lifegraph_kg import classes as c
-# All built-in classes are already Pydantic models. Subclass to extend:
-
-class Pet(c.Entity):
-    species: str
-    name: str
-
-lg.register(Pet)
+```bash
+pip install lifegraph-kg                          # SQLite-only
+pip install 'lifegraph-kg[postgres]'              # + psycopg
 ```
-
-## Influences
-
-`lifegraph-kg` draws on prior art it tries to credit clearly:
-
-- **Cognitive psych:** Conway (2000), the Self-Memory System model of autobiographical memory.
-- **Recent LLM papers:** Pink et al. 2025 (arXiv:2502.06975) on episodic memory for long-term agents; the Episodic Memories Generation Benchmark (arXiv:2501.13121) defining episodes as `(time, space, entities, content)` 4-tuples; Sumers et al. 2023 (CoALA, arXiv:2309.02427) for the three-tier (episodic/semantic/procedural) cognitive model.
-- **Engineering precedents:** Graphiti (Apache-2.0) for the episode model and bi-temporal edge invalidation; LangExtract (Apache-2.0) for the few-shot authoring surface and char-interval grounding; Memori for the SQL-first thesis.
 
 ## License
 

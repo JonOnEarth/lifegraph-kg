@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lifegraph-kg"
-version = "0.0.1"
+version = "0.1.0.dev0"
 description = "Autobiographical memory engine — typed schema with default life classes, indexed by time, place, and person."
 readme = "README.md"
 requires-python = ">=3.11"
