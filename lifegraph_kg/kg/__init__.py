@@ -339,17 +339,20 @@ class LifeGraph:
     Constructor:
         - `store=":memory:"`         in-memory SQLite (default — testing)
         - `store="sqlite:///path"`   file-backed SQLite
+        - `store="postgres://..."`   Postgres (needs ``[postgres]`` extra)
+        - `store=<Store instance>`   inject a pre-constructed backend
+                                     (e.g. RestStore for auth-only deploys)
         - `llm=...`                  inject a custom LLM client (mock for tests)
     """
 
     def __init__(
         self,
-        store: str = ":memory:",
+        store: str | Store = ":memory:",
         *,
         llm: LlmClient | None = None,
     ) -> None:
         self._llm = llm
-        self._store = _resolve_store(store)
+        self._store = _resolve_store(store) if isinstance(store, str) else store
         self.episodes = _EpisodeView(self._store)
         self.tasks = _TaskView(self._store)
         self.kg = _KgOps(self._store)
