@@ -61,7 +61,7 @@ Same SQL across all backends (driver pattern, inspired by Graphiti):
 |---------|--------|-------|
 | SQLite | default | zero-ops, single file, sub-50ms p50 |
 | Postgres | optional | for shared deployments; covers PGlite via PG protocol |
-| Kuzu | optional | embedded graph DB; richer graph queries (Cypher) |
+| Postgres + [Apache AGE](https://age.apache.org) | future (v0.2) | native graph traversal (Cypher path queries) on the same DSN |
 | Neo4j | future | for users coming from Graphiti |
 
 ## Authoring extractions

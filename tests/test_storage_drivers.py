@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the L4 storage drivers (Postgres + Kuzu).
+"""Tests for the L4 storage drivers (SQLite + Postgres).
 
 PostgresStore is full-fledged but the integration tests need a live
 Postgres. They're gated on ``LIFEGRAPH_TEST_POSTGRES_URL`` env var —
@@ -12,7 +12,8 @@ The Postgres tests run the SAME assertions as test_kg_store.py — the
 Store protocol is the contract; SQLite and Postgres should be
 behaviorally identical.
 
-KuzuStore is stubbed (L4.1) — only test the dispatch path.
+(Kuzu was considered but the project was archived October 2025 — for
+native graph traversal, Apache AGE on Postgres is the v0.2 path.)
 """
 
 from __future__ import annotations
@@ -78,13 +79,17 @@ def test_resolve_postgres_uri_imports_lazily() -> None:
         store.close()
 
 
-def test_resolve_kuzu_uri_dispatches_to_stub() -> None:
-    """KuzuStore stub raises a clear NotImplementedError so users
-    who try ``kuzu://`` in v0.1 get a helpful message."""
+def test_resolve_unrecognized_scheme_falls_back_to_sqlite() -> None:
+    """Unrecognized URIs are treated as bare SQLite paths. This means
+    e.g. a typo in the scheme gives a helpful SQLite open-file error
+    rather than an opaque dispatch failure. Users who want a different
+    backend pass a recognized URI; those who pass a path get SQLite."""
     from lifegraph_kg.kg import _resolve_store
+    from lifegraph_kg.kg.store.sqlite import SqliteStore
 
-    with pytest.raises(NotImplementedError, match=r"L4\.1"):
-        _resolve_store("kuzu:///tmp/not-implemented")
+    # ":memory:" is the safest "bare path" we can pass for the test.
+    store = _resolve_store(":memory:")
+    assert isinstance(store, SqliteStore)
 
 
 # ----- Postgres integration tests (gated) -----

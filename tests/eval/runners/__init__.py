@@ -65,7 +65,9 @@ def library_hygiene_ready() -> bool:
 
 
 def library_storage_drivers_ready() -> bool:
-    """L4 flips this to True when Postgres + Kuzu drivers land."""
-    return _module_has_attr("lifegraph_kg.kg.store.postgres", "PostgresStore") and _module_has_attr(
-        "lifegraph_kg.kg.store.kuzu", "KuzuStore"
-    )
+    """L4 flips this to True when alternate storage drivers land.
+
+    L4 v0.1 ships Postgres. (Kuzu was considered but the project was
+    archived Oct 2025; native graph traversal in v0.2 will go via
+    Apache AGE on Postgres — same DSN, same backend.)"""
+    return _module_has_attr("lifegraph_kg.kg.store.postgres", "PostgresStore")

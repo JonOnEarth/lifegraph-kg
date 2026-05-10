@@ -54,8 +54,12 @@ def _resolve_store(spec: str) -> Store:
       - ``"sqlite:path/to.db"``        — same, less-strict form
       - ``"postgres://user@host/db"``  — Postgres (requires ``[postgres]`` extra)
       - ``"postgresql://..."``         — same, alternate scheme
-      - ``"kuzu:///path/to/dir"``      — embedded Kuzu (L4.1, raises NotImplementedError)
       - bare path                      — assumed SQLite file
+
+    For native-graph traversal (Cypher path queries) on top of Postgres,
+    install the `Apache AGE <https://age.apache.org>`_ extension and use
+    a Postgres URI — AGE adds property-graph capabilities without
+    changing the connection string.
     """
     if spec == ":memory:":
         from lifegraph_kg.kg.store.sqlite import SqliteStore
@@ -73,10 +77,6 @@ def _resolve_store(spec: str) -> Store:
         from lifegraph_kg.kg.store.postgres import PostgresStore
 
         return PostgresStore(spec)
-    if spec.startswith("kuzu:///"):
-        from lifegraph_kg.kg.store.kuzu import KuzuStore
-
-        return KuzuStore(spec.removeprefix("kuzu:///"))
     # Bare path — assume SQLite file.
     from lifegraph_kg.kg.store.sqlite import SqliteStore
 

@@ -4,9 +4,10 @@
 The `Store` Protocol defines the minimal operation set every backend
 must implement. The library never touches a backend directly — all
 persistence flows through this protocol so swapping SQLite for
-Postgres / Kuzu / PGlite is one config change.
+Postgres / PGlite is one config change.
 
-L2 ships SQLite. Postgres and Kuzu are L4.
+L2 ships SQLite. Postgres lands in L4. Native graph traversal (Cypher
+path queries) lands in v0.2 via Apache AGE on Postgres — same DSN.
 """
 
 from __future__ import annotations

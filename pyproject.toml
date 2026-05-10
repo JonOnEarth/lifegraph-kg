@@ -44,9 +44,9 @@ hygiene = [
 postgres = [
     "psycopg[binary]>=3.2",
 ]
-kuzu = [
-    "kuzu>=0.6",
-]
+# A future "graph" extra will pull in apache-age client when the AGE
+# integration lands (v0.2). Kuzu was considered but the project was
+# archived Oct 2025; we don't take an unmaintained dep.
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
