@@ -340,25 +340,35 @@ class RestStore:
         return [_episode_from_row(r) for r in self._get("/episodes", **q)]
 
     def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]:
-        # Two-step: fetch mention rows, then batch-fetch episodes.
-        q1 = {"entity_id": f"eq.{entity_id}", "select": "episode_id"}
-        if limit is not None:
-            q1["limit"] = str(limit)
+        # Two-step: fetch mention rows, then batch-fetch episodes by id.
+        q1: dict[str, Any] = {"entity_id": f"eq.{entity_id}", "select": "episode_id"}
         rows = self._get("/entity_episode_mention", **q1)
         ep_ids = [r["episode_id"] for r in rows]
-        return self.episodes_mentioning_any(ep_ids, limit=limit) if ep_ids else []
+        return self._episodes_by_ids(ep_ids, limit=limit) if ep_ids else []
 
     def episodes_mentioning_any(
         self, entity_ids: list[str], limit: int | None = None
     ) -> list[Episode]:
         if not entity_ids:
             return []
-        # If callers passed entity_ids that look like episode IDs (via
-        # episodes_mentioning above), accept them. Otherwise resolve to
-        # episode IDs first.
-        # For the bare _episode_ids path we go straight to /episodes.
+        # JOIN through entity_episode_mention: get distinct episode_ids
+        # where entity_id IN (...), then fetch those episodes.
+        q1 = {
+            "entity_id": f"in.({','.join(entity_ids)})",
+            "select": "episode_id",
+        }
+        rows = self._get("/entity_episode_mention", **q1)
+        ep_ids = list({r["episode_id"] for r in rows})
+        return self._episodes_by_ids(ep_ids, limit=limit) if ep_ids else []
+
+    def _episodes_by_ids(
+        self, episode_ids: list[str], limit: int | None = None
+    ) -> list[Episode]:
+        """Bulk-fetch episodes by their PKs, ordered most-recent-first."""
+        if not episode_ids:
+            return []
         q: dict[str, Any] = {
-            "id": f"in.({','.join(entity_ids)})",
+            "id": f"in.({','.join(episode_ids)})",
             "order": "occurred_at.desc",
         }
         if limit is not None:
