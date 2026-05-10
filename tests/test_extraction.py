@@ -20,7 +20,6 @@ from lifegraph_kg.extract.grounding import (
     normalize_for_substring,
     violates_substring,
 )
-from lifegraph_kg.extract.schema import ExtractionResult
 
 
 class FakeClient:
@@ -224,13 +223,19 @@ def test_extract_calls_extractor_then_critic() -> None:
 # ----- LifeGraph facade -----
 
 
-def test_lifegraph_log_returns_extraction() -> None:
-    """LifeGraph.log() is a thin wrapper around extract() in L1."""
+def test_lifegraph_log_returns_episode() -> None:
+    """LifeGraph.log() returns the persisted Episode in L2."""
+    from lifegraph_kg.kg.episode import Episode
+
     fake = FakeClient(extraction_response=_VALID_EXTRACTION)
     lg = LifeGraph(llm=fake)
-    r = lg.log("Had ramen with Sara at Ippudo")
-    assert isinstance(r, ExtractionResult)
-    assert len(r.entities) == 3
+    ep = lg.log("Had ramen with Sara at Ippudo")
+    assert isinstance(ep, Episode)
+    assert ep.predicates == ["ate"]
+    # Entities are persisted, queryable via lg.query()
+    assert len(lg.query(Person).all()) == 1
+    assert len(lg.query(Place).all()) == 1
+    assert len(lg.query(Topic, kind="food").all()) == 1
 
 
 def test_lifegraph_log_handles_chinese() -> None:
@@ -249,11 +254,12 @@ def test_lifegraph_log_handles_chinese() -> None:
     )
     fake = FakeClient(extraction_response=extraction)
     lg = LifeGraph(llm=fake)
-    r = lg.log("晚上修复了 TimeWises 的几个 UI bug")
-    assert r.predicates == ["fixed"]
-    assert isinstance(r.entities[0], Project)
-    assert r.entities[0].value == "TimeWises"
-    assert r.entities[1].value == "UI bug"
+    ep = lg.log("晚上修复了 TimeWises 的几个 UI bug")
+    assert ep.predicates == ["fixed"]
+    timewises = lg.query(Project, key="timewises").one()
+    assert timewises.value == "TimeWises"
+    bugs = lg.query(Topic, key="ui-bug").one()
+    assert bugs.value == "UI bug"
 
 
 # ----- ontology classes -----

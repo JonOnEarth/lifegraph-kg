@@ -72,10 +72,9 @@ def run(validate_only: bool = False) -> CategoryResult:
             ),
         )
 
-    # Actually exercise the library.
-    from lifegraph_kg import LifeGraph
-
-    lg = LifeGraph()
+    # Exercise the library's extract() directly (we score the extraction
+    # itself, not persistence — those have their own runners).
+    from lifegraph_kg import extract
 
     f1_scores: list[float] = []
     type_acc_scores: list[float] = []
@@ -84,7 +83,7 @@ def run(validate_only: bool = False) -> CategoryResult:
     grounding_iou_scores: list[float] = []
 
     for fixture in fixtures:
-        result = lg.log(fixture.input_text)
+        result = extract(fixture.input_text)
 
         # Convert library Entity objects to eval Entity for scoring (same shape).
         predicted: list[Entity] = [
