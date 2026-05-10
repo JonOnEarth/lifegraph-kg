@@ -46,22 +46,40 @@ def _new_id() -> str:
 
 
 def _resolve_store(spec: str) -> Store:
-    """Parse a `store=` URI string and return a Store instance.
+    """Parse a ``store=`` URI string and return a Store instance.
 
     Recognized:
-      - ":memory:"             — in-memory SQLite (good for tests)
-      - "sqlite:///path/to.db" — file-backed SQLite (default)
-      - "sqlite:path/to.db"    — same, less-strict form
+      - ``":memory:"``                 — in-memory SQLite (good for tests)
+      - ``"sqlite:///path/to.db"``     — file-backed SQLite (default)
+      - ``"sqlite:path/to.db"``        — same, less-strict form
+      - ``"postgres://user@host/db"``  — Postgres (requires ``[postgres]`` extra)
+      - ``"postgresql://..."``         — same, alternate scheme
+      - ``"kuzu:///path/to/dir"``      — embedded Kuzu (L4.1, raises NotImplementedError)
+      - bare path                      — assumed SQLite file
     """
-    from lifegraph_kg.kg.store.sqlite import SqliteStore
-
     if spec == ":memory:":
+        from lifegraph_kg.kg.store.sqlite import SqliteStore
+
         return SqliteStore(":memory:")
     if spec.startswith("sqlite:///"):
+        from lifegraph_kg.kg.store.sqlite import SqliteStore
+
         return SqliteStore(spec.removeprefix("sqlite:///"))
     if spec.startswith("sqlite:"):
+        from lifegraph_kg.kg.store.sqlite import SqliteStore
+
         return SqliteStore(spec.removeprefix("sqlite:"))
+    if spec.startswith(("postgres://", "postgresql://")):
+        from lifegraph_kg.kg.store.postgres import PostgresStore
+
+        return PostgresStore(spec)
+    if spec.startswith("kuzu:///"):
+        from lifegraph_kg.kg.store.kuzu import KuzuStore
+
+        return KuzuStore(spec.removeprefix("kuzu:///"))
     # Bare path — assume SQLite file.
+    from lifegraph_kg.kg.store.sqlite import SqliteStore
+
     return SqliteStore(spec)
 
 
