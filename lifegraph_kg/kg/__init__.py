@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 from lifegraph_kg.classes import Entity
 from lifegraph_kg.extract import extract
 from lifegraph_kg.extract.schema import EntityT, ExtractionResult
+from lifegraph_kg.hygiene.dedup import propose_merges as _propose_merges
+from lifegraph_kg.hygiene.proposals import MergeProposal
 from lifegraph_kg.kg.edge import Edge
 from lifegraph_kg.kg.episode import Episode
 
@@ -79,6 +81,10 @@ class _EpisodeView:
     def since(self, t: datetime, *, limit: int | None = None) -> list[Episode]:
         return self._store.episodes_since(t, limit=limit)
 
+    def between(self, start: datetime, end: datetime, *, limit: int | None = None) -> list[Episode]:
+        """Episodes with occurred_at in [start, end]. Inclusive both ends."""
+        return self._store.episodes_between(start, end, limit=limit)
+
     def mentioning(self, entity: Entity | str, *, limit: int | None = None) -> list[Episode]:
         """Episodes that mention `entity` (by Entity object or by id)."""
         if isinstance(entity, Entity):
@@ -117,11 +123,118 @@ class _EntityQuery:
         """Return the first match, or None if empty."""
         return self._entities[0] if self._entities else None
 
+    def episodes(self, *, limit: int | None = None) -> list[Episode]:
+        """Pivot from entities to episodes — return all episodes that
+        mention any of the matched entities, deduplicated and ordered
+        most-recent first.
+
+        Examples:
+            # All episodes mentioning a specific person
+            sara = lg.query(Person, key="sara").one()
+            lg.query(Person, key="sara").episodes()
+
+            # All episodes that mention any food (a personal eating timeline)
+            lg.query(Topic, kind="food").episodes()
+        """
+        ids: list[str] = []
+        for e in self._entities:
+            ent_id = self._store.find_entity_id(e.type, e.key)
+            if ent_id is not None:
+                ids.append(ent_id)
+        return self._store.episodes_mentioning_any(ids, limit=limit)
+
     def __iter__(self) -> Iterator[EntityT]:
         return iter(self._entities)
 
     def __len__(self) -> int:
         return len(self._entities)
+
+
+class _HygieneOps:
+    """`lg.hygiene.<...>` — dedup + canonicalization.
+
+    L3 v0.1: pure-string heuristics (NFKC + casefold + substring +
+    Levenshtein). The differentiator between this package and
+    Graphiti / Mem0 / Letta — explicit, reviewable, audit-preserving
+    dedup instead of "trust the LLM + graph merge".
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def propose(
+        self,
+        *,
+        type_: str | None = None,
+        kind: str | None = None,
+        record: bool = False,
+    ) -> list[MergeProposal]:
+        """Run heuristic dedup over the entity set.
+
+        Args:
+            type_:  restrict to a specific entity type (Person / Place / Project / Topic)
+            kind:   restrict to a specific Topic kind (food / media / etc.)
+            record: if True, persist each proposal to the merge_proposals table
+                    so they survive across sessions.
+
+        Returns the list of proposed merges. Each MergeProposal has a
+        `confidence` field and an `is_safe_to_auto_apply` property —
+        callers decide what to do with each.
+        """
+        entities = self._store.query_entities(type_=type_, kind=kind)
+        proposals = _propose_merges(entities)
+        if record:
+            from lifegraph_kg.kg.store.sqlite import SqliteStore
+
+            if isinstance(self._store, SqliteStore):
+                for p in proposals:
+                    win_id = self._store.find_entity_id(p.winner.type, p.winner.key)
+                    los_id = self._store.find_entity_id(p.loser.type, p.loser.key)
+                    if win_id and los_id:
+                        self._store.record_proposal(
+                            proposal_id=_new_id(),
+                            winner_id=win_id,
+                            loser_id=los_id,
+                            confidence=p.confidence,
+                            reason=p.reason,
+                            detail=p.detail,
+                        )
+        return proposals
+
+    def apply(self, proposal: MergeProposal) -> None:
+        """Apply a merge: redirect loser's edges + mentions to winner.
+
+        Idempotent: applying the same merge twice is a no-op (the second
+        call finds nothing to redirect). Audit-preserving: the loser
+        entity row stays in the DB with `canonical_id` pointing at the
+        winner — it's an alias, not a deletion.
+        """
+        from lifegraph_kg.kg.store.sqlite import SqliteStore
+
+        if not isinstance(self._store, SqliteStore):
+            raise NotImplementedError("apply() requires SqliteStore; other backends in L4.")
+        winner_id = self._store.find_entity_id(proposal.winner.type, proposal.winner.key)
+        loser_id = self._store.find_entity_id(proposal.loser.type, proposal.loser.key)
+        if winner_id is None or loser_id is None:
+            return  # one side was already merged away
+        self._store.apply_merge(winner_id, loser_id)
+
+    def auto_apply(
+        self, *, type_: str | None = None, kind: str | None = None
+    ) -> list[MergeProposal]:
+        """Run propose() and apply every proposal that is_safe_to_auto_apply.
+
+        Returns the list of proposals that were applied. The default
+        is_safe rule is `confidence == "high"` AND `reason ==
+        "exact_normalized"` — only the truly unambiguous cases.
+        """
+        proposals = self.propose(type_=type_, kind=kind)
+        applied: list[MergeProposal] = []
+        for p in proposals:
+            if p.is_safe_to_auto_apply:
+                self.apply(p)
+                applied.append(p)
+        return applied
 
 
 class _KgOps:
@@ -165,6 +278,7 @@ class LifeGraph:
         self._store = _resolve_store(store)
         self.episodes = _EpisodeView(self._store)
         self.kg = _KgOps(self._store)
+        self.hygiene = _HygieneOps(self._store)
 
     # --- ingestion ---
 

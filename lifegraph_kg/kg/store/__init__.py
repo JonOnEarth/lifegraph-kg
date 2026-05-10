@@ -54,7 +54,15 @@ class Store(Protocol):
 
     def episodes_since(self, t: datetime, limit: int | None = None) -> list[Episode]: ...
 
+    def episodes_between(
+        self, start: datetime, end: datetime, limit: int | None = None
+    ) -> list[Episode]: ...
+
     def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]: ...
+
+    def episodes_mentioning_any(
+        self, entity_ids: list[str], limit: int | None = None
+    ) -> list[Episode]: ...
 
     # --- Entity reads ---
 

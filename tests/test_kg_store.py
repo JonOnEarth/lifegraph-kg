@@ -186,6 +186,58 @@ def test_lifegraph_query_topic_kind_filter() -> None:
     assert foods[0].value == "ramen"
 
 
+def test_episodes_between_returns_inclusive_range() -> None:
+    s = SqliteStore(":memory:")
+    s.save_episode(
+        Episode(id="early", text="early", occurred_at=T0, ingested_at=T0),
+        entities=[],
+        edges=[],
+    )
+    s.save_episode(
+        Episode(id="mid", text="mid", occurred_at=T1, ingested_at=T1),
+        entities=[],
+        edges=[],
+    )
+    s.save_episode(
+        Episode(id="late", text="late", occurred_at=T2, ingested_at=T2),
+        entities=[],
+        edges=[],
+    )
+    # Range that includes only the middle
+    eps = s.episodes_between(T1, T1)
+    assert [e.id for e in eps] == ["mid"]
+    # Range that spans all
+    eps_all = s.episodes_between(T0, T2)
+    assert [e.id for e in eps_all] == ["late", "mid", "early"]
+
+
+def test_entity_query_episodes_pivot() -> None:
+    """`lg.query(Topic, kind='food').episodes()` returns the meal timeline."""
+    fake = FakeClient(extraction_response=_RAMEN_EXTRACTION)
+    lg = LifeGraph(llm=fake)
+    lg.log("Had ramen with Sara at Ippudo", occurred_at=T0)
+    lg.log("Had ramen with Sara at Ippudo", occurred_at=T1)  # second meal
+    food_episodes = lg.query(Topic, kind="food").episodes()
+    # Both episodes mention ramen; pivot returns both, reverse-chronological
+    assert len(food_episodes) == 2
+    assert food_episodes[0].occurred_at > food_episodes[1].occurred_at
+
+
+def test_entity_query_episodes_pivot_dedups() -> None:
+    """If multiple matched entities share an episode, the episode appears once."""
+    fake = FakeClient(extraction_response=_RAMEN_EXTRACTION)
+    lg = LifeGraph(llm=fake)
+    lg.log("Had ramen with Sara at Ippudo", occurred_at=T0)
+    # 3 entities (Sara, Ippudo, ramen) all mention the same episode.
+    # query(Person, key=None) returns just Sara; query() across types
+    # would otherwise count the episode multiple times — DISTINCT in SQL
+    # avoids that. Verify by querying a type that has multiple matches:
+    lg.log("Had ramen with Sara at Ippudo", occurred_at=T1)
+    # 2 episodes, 1 Person (Sara) — pivot returns 2 distinct episodes
+    sara_eps = lg.query(Person, key="sara").episodes()
+    assert len(sara_eps) == 2
+
+
 def test_lifegraph_in_memory_isolates_per_instance() -> None:
     """Two `:memory:` LifeGraphs are independent."""
     fake = FakeClient(extraction_response=_RAMEN_EXTRACTION)

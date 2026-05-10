@@ -25,7 +25,10 @@ from lifegraph_kg.kg.edge import Edge
 from lifegraph_kg.kg.episode import Episode
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-SCHEMA_VERSION = 1
+# The latest schema version. Bump in lockstep with adding a new
+# `00NN_name.sql` migration file. The runner applies only migrations
+# with version > current_version, so old DBs migrate forward.
+SCHEMA_VERSION = 2
 
 
 def _to_ms(dt: datetime) -> int:
@@ -116,24 +119,34 @@ class SqliteStore:
     # --- schema ---
 
     def init_schema(self) -> None:
-        cur = self._conn.execute(
-            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
-            if self._table_exists("schema_version")
-            else "SELECT 0"
-        )
-        current = cur.fetchone()
-        current_version = current[0] if current else 0
+        """Apply pending migrations. Idempotent — only migrations whose
+        version > current_version are applied. Each migration's leading
+        digits in the filename are its version number (`0001_initial.sql`
+        is version 1, `0002_hygiene.sql` is version 2)."""
+        if self._table_exists("schema_version"):
+            row = self._conn.execute(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+            ).fetchone()
+            current_version = row[0] if row else 0
+        else:
+            current_version = 0
         if current_version >= SCHEMA_VERSION:
             return
-        # Apply each migration in order.
+
         for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            # Filename like "0001_initial.sql" → version 1
+            try:
+                version = int(migration.name.split("_", 1)[0])
+            except ValueError:
+                continue
+            if version <= current_version:
+                continue  # already applied
             sql = migration.read_text()
             self._conn.executescript(sql)
-        # Stamp the version.
-        self._conn.execute(
-            "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
-            (SCHEMA_VERSION, _to_ms(datetime.now(UTC))),
-        )
+            self._conn.execute(
+                "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
+                (version, _to_ms(datetime.now(UTC))),
+            )
         self._conn.commit()
 
     def _table_exists(self, name: str) -> bool:
@@ -246,6 +259,20 @@ class SqliteStore:
             params.append(limit)
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
+    def episodes_between(
+        self, start: datetime, end: datetime, limit: int | None = None
+    ) -> list[Episode]:
+        """Episodes with `occurred_at` in [start, end]. Inclusive on both ends."""
+        sql = (
+            "SELECT * FROM episodes WHERE occurred_at >= ? AND occurred_at <= ? "
+            "ORDER BY occurred_at DESC"
+        )
+        params: list[object] = [_to_ms(start), _to_ms(end)]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
+
     def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]:
         sql = (
             "SELECT e.* FROM episodes e "
@@ -254,6 +281,28 @@ class SqliteStore:
             "ORDER BY e.occurred_at DESC"
         )
         params: list[object] = [entity_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
+
+    def episodes_mentioning_any(
+        self, entity_ids: list[str], limit: int | None = None
+    ) -> list[Episode]:
+        """Episodes that mention ANY of the given entities. Used by the
+        ``_EntityQuery.episodes()`` pivot — given a set of matched entities,
+        return episodes that mention any one of them, deduplicated and
+        reverse-chronological."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" * len(entity_ids))
+        sql = (
+            f"SELECT DISTINCT e.* FROM episodes e "
+            f"JOIN entity_episode_mention m ON m.episode_id = e.id "
+            f"WHERE m.entity_id IN ({placeholders}) "
+            f"ORDER BY e.occurred_at DESC"
+        )
+        params: list[object] = list(entity_ids)
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
@@ -316,6 +365,82 @@ class SqliteStore:
             (episode_id,),
         )
         return [_edge_from_row(r) for r in rows]
+
+    # --- hygiene (L3) ---
+
+    def record_proposal(
+        self,
+        proposal_id: str,
+        winner_id: str,
+        loser_id: str,
+        confidence: str,
+        reason: str,
+        detail: str = "",
+    ) -> None:
+        """Persist a MergeProposal so it can be reviewed + applied later."""
+        with self._conn:
+            self._conn.execute(
+                """INSERT INTO merge_proposals
+                     (id, winner_id, loser_id, confidence, reason, detail, proposed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    proposal_id,
+                    winner_id,
+                    loser_id,
+                    confidence,
+                    reason,
+                    detail,
+                    _to_ms(datetime.now(UTC)),
+                ),
+            )
+
+    def apply_merge(self, winner_id: str, loser_id: str) -> None:
+        """Apply a merge: redirect loser's edges + mentions to winner,
+        and set loser.canonical_id = winner. The loser entity row
+        survives — it's an alias, not a deletion. Audit-trail-preserving."""
+        if winner_id == loser_id:
+            return
+        with self._conn:
+            # Redirect edges
+            self._conn.execute(
+                "UPDATE edges SET to_entity = ? WHERE to_entity = ?",
+                (winner_id, loser_id),
+            )
+            self._conn.execute(
+                "UPDATE edges SET from_entity = ? WHERE from_entity = ?",
+                (winner_id, loser_id),
+            )
+            # Redirect mentions (UPSERT-like: drop conflicts that already
+            # link winner to the same episode)
+            self._conn.execute(
+                """UPDATE OR IGNORE entity_episode_mention
+                   SET entity_id = ? WHERE entity_id = ?""",
+                (winner_id, loser_id),
+            )
+            # Drop now-orphaned mention rows for the loser
+            self._conn.execute(
+                "DELETE FROM entity_episode_mention WHERE entity_id = ?",
+                (loser_id,),
+            )
+            # Mark the loser as merged
+            self._conn.execute(
+                "UPDATE entities SET canonical_id = ? WHERE id = ?",
+                (winner_id, loser_id),
+            )
+
+    def mark_proposal_applied(self, proposal_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE merge_proposals SET applied_at = ? WHERE id = ?",
+                (_to_ms(datetime.now(UTC)), proposal_id),
+            )
+
+    def mark_proposal_rejected(self, proposal_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE merge_proposals SET rejected_at = ? WHERE id = ?",
+                (_to_ms(datetime.now(UTC)), proposal_id),
+            )
 
     # --- introspection ---
 
