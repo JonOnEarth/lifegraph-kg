@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from lifegraph_kg.classes import Entity
@@ -255,6 +255,62 @@ class _HygieneOps:
         return applied
 
 
+class _TaskView:
+    """`lg.tasks.<...>` — task-flavored episode queries.
+
+    Tasks are episodes with ``kind="task"``. The view filters by
+    lifecycle attributes (status, priority, deadline, gtd_context)
+    so call sites read like a query DSL: ``lg.tasks.pending()``,
+    ``lg.tasks.due_soon(within=...)``, ``lg.tasks.by_context("@work")``.
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def pending(self) -> list[Episode]:
+        """Tasks that are still active (not done, not dropped)."""
+        return self._store.query_tasks(status="active")
+
+    def overdue(self, *, as_of: datetime | None = None) -> list[Episode]:
+        """Active tasks past their deadline."""
+        cutoff = as_of if as_of is not None else datetime.now(UTC)
+        return self._store.query_tasks(status="active", deadline_before=cutoff)
+
+    def due_soon(
+        self,
+        within: timedelta,
+        *,
+        as_of: datetime | None = None,
+    ) -> list[Episode]:
+        """Active tasks whose deadline falls within the window
+        ``[as_of, as_of + within]``."""
+        now = as_of if as_of is not None else datetime.now(UTC)
+        return self._store.query_tasks(
+            status="active",
+            deadline_after=now,
+            deadline_before=now + within,
+        )
+
+    def completed_in(self, start: datetime, end: datetime) -> list[Episode]:
+        """Tasks completed in [start, end]. Implemented as a simple
+        in-Python filter on episodes_between since the lifecycle window
+        is on completed_at, not occurred_at."""
+        # No first-class store method for this — query all done tasks
+        # and filter. Personal-scale is fine; v0.2 can index completed_at.
+        all_done = self._store.query_tasks(status="done")
+        return [
+            t for t in all_done if t.completed_at is not None and start <= t.completed_at <= end
+        ]
+
+    def by_context(self, context: str) -> list[Episode]:
+        """Tasks matching a GTD context (e.g. ``@work``)."""
+        return self._store.query_tasks(status="active", gtd_context=context)
+
+    def by_priority(self, priority: str) -> list[Episode]:
+        """Tasks at a given priority level (high / medium / low)."""
+        return self._store.query_tasks(status="active", priority=priority)
+
+
 class _KgOps:
     """`lg.kg.<...>` — graph-level operations (bi-temporal CRUD)."""
 
@@ -295,6 +351,7 @@ class LifeGraph:
         self._llm = llm
         self._store = _resolve_store(store)
         self.episodes = _EpisodeView(self._store)
+        self.tasks = _TaskView(self._store)
         self.kg = _KgOps(self._store)
         self.hygiene = _HygieneOps(self._store)
 
@@ -376,6 +433,118 @@ class LifeGraph:
                 )
         self._store.add_edges(edges)
         return ep
+
+    # --- task ingestion + lifecycle ---
+
+    def task(
+        self,
+        text: str,
+        *,
+        deadline: datetime | None = None,
+        priority: str | None = None,
+        gtd_context: str | None = None,
+        recurrence: str | None = None,
+        action_verb: str | None = None,
+        occurred_at: datetime | None = None,
+        source: str = "user",
+    ) -> Episode:
+        """Create a task — an Episode with kind='task' + lifecycle fields.
+
+        The task's text gets the same v6 extraction (entities, predicates)
+        as a log; the difference is the kind discriminator + the structured
+        lifecycle metadata. Tasks linked to entities show up in the same
+        ``episodes.mentioning(entity)`` queries that logs do — querying
+        "everything about Project X" returns both.
+        """
+        result = extract(text, llm=self._llm)
+        return self._persist_task(
+            text,
+            result,
+            occurred_at=occurred_at,
+            source=source,
+            deadline=deadline,
+            priority=priority,
+            gtd_context=gtd_context,
+            recurrence=recurrence,
+            action_verb=action_verb,
+        )
+
+    def _persist_task(
+        self,
+        text: str,
+        extraction: ExtractionResult,
+        *,
+        occurred_at: datetime | None = None,
+        source: str = "user",
+        deadline: datetime | None = None,
+        priority: str | None = None,
+        gtd_context: str | None = None,
+        recurrence: str | None = None,
+        action_verb: str | None = None,
+    ) -> Episode:
+        """Internal — persist a task with the same two-phase save as
+        ``persist()`` but with task-flavored metadata + kind='task'.
+
+        Public callers use ``task()``; the migration script uses this
+        directly to skip re-extraction when the entities are already known."""
+        now = datetime.now(UTC)
+        # For tasks, occurred_at defaults to now (creation time).
+        # Some callers (like the todo migration) pass the original
+        # legacy timestamp.
+        ep = Episode(
+            id=_new_id(),
+            text=text,
+            occurred_at=occurred_at if occurred_at is not None else now,
+            ingested_at=now,
+            source=source,
+            predicates=extraction.predicates,
+            body_state=extraction.body_state,
+            sentiment=extraction.sentiment,
+            energy=extraction.energy,
+            kind="task",
+            status="active",
+            priority=priority,  # type: ignore[arg-type]
+            deadline=deadline,
+            recurrence=recurrence,
+            gtd_context=gtd_context,
+            action_verb=action_verb,
+        )
+        self._store.save_episode(ep, list(extraction.entities), edges=[])
+
+        edges: list[Edge] = []
+        for predicate in extraction.predicates:
+            for entity in extraction.entities:
+                ent_id = self._store.find_entity_id(entity.type, entity.key)
+                if ent_id is None:
+                    continue
+                edges.append(
+                    Edge(
+                        id=_new_id(),
+                        from_entity=None,
+                        to_entity=ent_id,
+                        verb=predicate,
+                        episode_id=ep.id,
+                        t_event=ep.occurred_at,
+                        t_ingestion=ep.ingested_at,
+                        t_valid=ep.occurred_at,
+                        t_invalid=None,
+                    )
+                )
+        self._store.add_edges(edges)
+        return ep
+
+    def complete_task(self, episode_id: str, *, at: datetime | None = None) -> None:
+        """Mark a task as done. ``at`` defaults to now."""
+        completed_at = at if at is not None else datetime.now(UTC)
+        self._store.update_task_status(episode_id, "done", completed_at)
+
+    def drop_task(self, episode_id: str) -> None:
+        """Mark a task as dropped (won't do; not done)."""
+        self._store.update_task_status(episode_id, "dropped")
+
+    def reopen_task(self, episode_id: str) -> None:
+        """Reopen a completed/dropped task back to active."""
+        self._store.update_task_status(episode_id, "active")
 
     # --- querying ---
 

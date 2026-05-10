@@ -1,14 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Episode — the unit-of-record for autobiographical memory.
+"""Episode — the unit-of-record for autobiographical memory + tasks.
 
-An Episode is a Perdurant in DOLCE terms (it unfolds over time) and
-maps to CIDOC-CRM's E5 Event and Conway's Event-Specific Knowledge.
-It IS the activity instance — there is no separate Activity node.
+In DOLCE terms an Episode is a Perdurant (it unfolds over time); maps to
+CIDOC-CRM E5 Event and Conway's Event-Specific Knowledge.
 
-`predicates`, `body_state`, `sentiment`, `energy` are scalar metadata
-on the episode itself, not separate node-classes. This matches Conway's
-Self-Memory System: affect and bodily-state are sensory-perceptual-
-conceptual-affective summary features of the episode, not participants.
+`predicates`, `body_state`, `sentiment`, `energy` are scalar metadata on
+the episode itself, not separate node-classes (Conway's SMS: affect is
+a feature of the episode, not a participant).
+
+## Logs vs. tasks
+
+Episodes have a ``kind`` discriminator: ``"log"`` (default — events that
+happened, autobiographical memory) or ``"task"`` (intents — prospective
+memory). They share most of the schema; tasks add lifecycle fields:
+
+  - ``status``       active | done | dropped (default active)
+  - ``priority``     high | medium | low | None
+  - ``deadline``     when the task is due
+  - ``completed_at`` when status moved to "done"
+  - ``recurrence``   "daily" / "weekly" / RRULE-ish
+  - ``gtd_context``  "@home", "@work", etc.
+  - ``action_verb``  primary verb (often == predicates[0])
+
+A completed task and a log are functionally equivalent for queries
+("what did I do today" returns both).
 """
 
 from __future__ import annotations
@@ -20,25 +35,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Sentiment = Literal["pos", "neu", "neg"]
 Energy = Literal["high", "medium", "low"]
+EpisodeKind = Literal["log", "task"]
+EpisodeStatus = Literal["active", "done", "dropped"]
+Priority = Literal["high", "medium", "low"]
 
 
 class Episode(BaseModel):
-    """A persisted life-log entry.
+    """A persisted life-log entry or task.
 
-    Fields:
-      - `id`           — unique identifier (ULID-ish, generated on save)
-      - `text`         — the original entry, verbatim
-      - `occurred_at`  — when the event happened in the user's life
-      - `ingested_at`  — when this record was created in the store
-      - `source`       — provenance: "user", "telegram", "voice", etc.
-      - `predicates`   — list of normalized verbs (the v6 multi-action design)
-      - `body_state`   — bodily state if explicitly mentioned ("tired", "累了")
-      - `sentiment`    — affective valence, only when explicit
-      - `energy`       — energy level, only when explicit
+    Common fields apply to both kinds. Task-only fields (``status``,
+    ``priority``, ``deadline``, ``completed_at``, ``recurrence``,
+    ``gtd_context``, ``action_verb``) are present on logs too with
+    defaults — the cost is one nullable column per field, the win is
+    a uniform query surface.
     """
 
     model_config = ConfigDict(frozen=True)
 
+    # Common to logs + tasks
     id: str
     text: str
     occurred_at: datetime
@@ -48,3 +62,17 @@ class Episode(BaseModel):
     body_state: str | None = None
     sentiment: Sentiment | None = None
     energy: Energy | None = None
+
+    # Discriminator — defaults to "log" so existing call sites are unchanged
+    kind: EpisodeKind = "log"
+
+    # Task lifecycle (only meaningful when kind == "task", but present on
+    # all rows for schema simplicity). Defaults preserve log semantics:
+    # active+nothing-pending matches existing log behavior.
+    status: EpisodeStatus = "active"
+    priority: Priority | None = None
+    deadline: datetime | None = None
+    completed_at: datetime | None = None
+    recurrence: str | None = None
+    gtd_context: str | None = None
+    action_verb: str | None = None

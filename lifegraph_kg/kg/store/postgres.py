@@ -48,9 +48,19 @@ CREATE TABLE IF NOT EXISTS episodes (
   predicates    TEXT NOT NULL DEFAULT '[]',
   body_state    TEXT,
   sentiment     TEXT,
-  energy        TEXT
+  energy        TEXT,
+  kind          TEXT NOT NULL DEFAULT 'log',
+  status        TEXT NOT NULL DEFAULT 'active',
+  priority      TEXT,
+  deadline      BIGINT,
+  completed_at  BIGINT,
+  recurrence    TEXT,
+  gtd_context   TEXT,
+  action_verb   TEXT
 )""",
     "CREATE INDEX IF NOT EXISTS idx_episodes_occurred_at ON episodes(occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_kind_status ON episodes(kind, status)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_deadline ON episodes(deadline)",
     """\
 CREATE TABLE IF NOT EXISTS entities (
   id              TEXT PRIMARY KEY,
@@ -156,6 +166,14 @@ def _episode_from_row(row: dict[str, Any]) -> Episode:
         body_state=row["body_state"],
         sentiment=row["sentiment"],
         energy=row["energy"],
+        kind=row.get("kind") or "log",
+        status=row.get("status") or "active",
+        priority=row.get("priority"),
+        deadline=_from_ms(row.get("deadline")),
+        completed_at=_from_ms(row.get("completed_at")),
+        recurrence=row.get("recurrence"),
+        gtd_context=row.get("gtd_context"),
+        action_verb=row.get("action_verb"),
     )
 
 
@@ -219,8 +237,11 @@ class PostgresStore:
             cur.execute(
                 """INSERT INTO episodes
                      (id, text, occurred_at, ingested_at, source,
-                      predicates, body_state, sentiment, energy)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                      predicates, body_state, sentiment, energy,
+                      kind, status, priority, deadline, completed_at,
+                      recurrence, gtd_context, action_verb)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     episode.id,
                     episode.text,
@@ -231,6 +252,14 @@ class PostgresStore:
                     episode.body_state,
                     episode.sentiment,
                     episode.energy,
+                    episode.kind,
+                    episode.status,
+                    episode.priority,
+                    _to_ms(episode.deadline) if episode.deadline else None,
+                    _to_ms(episode.completed_at) if episode.completed_at else None,
+                    episode.recurrence,
+                    episode.gtd_context,
+                    episode.action_verb,
                 ),
             )
             for entity in entities:
@@ -505,6 +534,59 @@ class PostgresStore:
                 (_to_ms(datetime.now(UTC)), proposal_id),
             )
         self._conn.commit()
+
+    # --- task lifecycle ---
+
+    def update_task_status(
+        self,
+        episode_id: str,
+        status: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        with self._conn.cursor() as cur:
+            if completed_at is not None:
+                cur.execute(
+                    "UPDATE episodes SET status = %s, completed_at = %s WHERE id = %s",
+                    (status, _to_ms(completed_at), episode_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE episodes SET status = %s, completed_at = NULL WHERE id = %s",
+                    (status, episode_id),
+                )
+        self._conn.commit()
+
+    def query_tasks(
+        self,
+        *,
+        status: str | None = None,
+        priority: str | None = None,
+        gtd_context: str | None = None,
+        deadline_before: datetime | None = None,
+        deadline_after: datetime | None = None,
+    ) -> list[Episode]:
+        sql = "SELECT * FROM episodes WHERE kind = 'task'"
+        params: list[Any] = []
+        if status is not None:
+            sql += " AND status = %s"
+            params.append(status)
+        if priority is not None:
+            sql += " AND priority = %s"
+            params.append(priority)
+        if gtd_context is not None:
+            sql += " AND gtd_context = %s"
+            params.append(gtd_context)
+        if deadline_before is not None:
+            sql += " AND deadline IS NOT NULL AND deadline < %s"
+            params.append(_to_ms(deadline_before))
+        if deadline_after is not None:
+            sql += " AND deadline IS NOT NULL AND deadline > %s"
+            params.append(_to_ms(deadline_after))
+        # Postgres has native NULLS LAST
+        sql += " ORDER BY deadline ASC NULLS LAST, occurred_at DESC"
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
+            return [_episode_from_row(r) for r in cur.fetchall()]
 
     # --- introspection ---
 

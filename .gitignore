@@ -55,3 +55,7 @@ me.db
 
 # Private fixtures (real user data — never committed)
 tests/eval/fixtures/private/
+
+# Migration outputs (real user data — never committed)
+scripts/migrate_from_d1/data/
+scripts/migrate_from_d1/*.db

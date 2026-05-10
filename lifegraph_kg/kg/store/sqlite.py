@@ -28,7 +28,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 # The latest schema version. Bump in lockstep with adding a new
 # `00NN_name.sql` migration file. The runner applies only migrations
 # with version > current_version, so old DBs migrate forward.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _to_ms(dt: datetime) -> int:
@@ -70,6 +70,14 @@ def _entity_from_row(row: sqlite3.Row) -> EntityT:
 
 
 def _episode_from_row(row: sqlite3.Row) -> Episode:
+    # The task-support columns are added by migration 0003 — they're
+    # accessed by name and SQLite returns NULL for missing columns on
+    # older DBs that haven't migrated. We tolerate both.
+    keys = row.keys() if hasattr(row, "keys") else []
+
+    def _get(field: str, default: object = None) -> object:
+        return row[field] if field in keys else default
+
     return Episode(
         id=row["id"],
         text=row["text"],
@@ -80,6 +88,14 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
         body_state=row["body_state"],
         sentiment=row["sentiment"],
         energy=row["energy"],
+        kind=_get("kind", "log") or "log",  # type: ignore[arg-type]
+        status=_get("status", "active") or "active",  # type: ignore[arg-type]
+        priority=_get("priority"),  # type: ignore[arg-type]
+        deadline=_from_ms(_get("deadline")),  # type: ignore[arg-type]
+        completed_at=_from_ms(_get("completed_at")),  # type: ignore[arg-type]
+        recurrence=_get("recurrence"),  # type: ignore[arg-type]
+        gtd_context=_get("gtd_context"),  # type: ignore[arg-type]
+        action_verb=_get("action_verb"),  # type: ignore[arg-type]
     )
 
 
@@ -167,8 +183,11 @@ class SqliteStore:
         with self._conn:  # transaction
             self._conn.execute(
                 """INSERT INTO episodes (id, text, occurred_at, ingested_at, source,
-                                          predicates, body_state, sentiment, energy)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          predicates, body_state, sentiment, energy,
+                                          kind, status, priority, deadline,
+                                          completed_at, recurrence, gtd_context,
+                                          action_verb)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     episode.id,
                     episode.text,
@@ -179,6 +198,14 @@ class SqliteStore:
                     episode.body_state,
                     episode.sentiment,
                     episode.energy,
+                    episode.kind,
+                    episode.status,
+                    episode.priority,
+                    _to_ms(episode.deadline) if episode.deadline else None,
+                    _to_ms(episode.completed_at) if episode.completed_at else None,
+                    episode.recurrence,
+                    episode.gtd_context,
+                    episode.action_verb,
                 ),
             )
             for entity in entities:
@@ -441,6 +468,65 @@ class SqliteStore:
                 "UPDATE merge_proposals SET rejected_at = ? WHERE id = ?",
                 (_to_ms(datetime.now(UTC)), proposal_id),
             )
+
+    # --- task lifecycle (L3.1) ---
+
+    def update_task_status(
+        self,
+        episode_id: str,
+        status: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        """Transition a task's status. ``completed_at`` is set only when
+        moving to ``"done"`` — caller decides timing (test harness clocks,
+        backfills, etc.)."""
+        with self._conn:
+            if completed_at is not None:
+                self._conn.execute(
+                    "UPDATE episodes SET status = ?, completed_at = ? WHERE id = ?",
+                    (status, _to_ms(completed_at), episode_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE episodes SET status = ?, completed_at = NULL WHERE id = ?",
+                    (status, episode_id),
+                )
+
+    def query_tasks(
+        self,
+        *,
+        status: str | None = None,
+        priority: str | None = None,
+        gtd_context: str | None = None,
+        deadline_before: datetime | None = None,
+        deadline_after: datetime | None = None,
+    ) -> list[Episode]:
+        """Filter task-kind episodes by lifecycle attributes."""
+        sql = "SELECT * FROM episodes WHERE kind = 'task'"
+        params: list[object] = []
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if priority is not None:
+            sql += " AND priority = ?"
+            params.append(priority)
+        if gtd_context is not None:
+            sql += " AND gtd_context = ?"
+            params.append(gtd_context)
+        if deadline_before is not None:
+            sql += " AND deadline IS NOT NULL AND deadline < ?"
+            params.append(_to_ms(deadline_before))
+        if deadline_after is not None:
+            sql += " AND deadline IS NOT NULL AND deadline > ?"
+            params.append(_to_ms(deadline_after))
+        sql += " ORDER BY deadline ASC NULLS LAST, occurred_at DESC"
+        # SQLite doesn't support NULLS LAST natively without ORDER BY tricks;
+        # use a CASE to push NULL deadlines to the end.
+        sql = sql.replace(
+            "ORDER BY deadline ASC NULLS LAST",
+            "ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline ASC",
+        )
+        return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
     # --- introspection ---
 

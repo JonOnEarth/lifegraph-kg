@@ -88,3 +88,25 @@ class Store(Protocol):
         time-travel queries: 'what did I think was true on 2025-12-01?'"""
 
     def edges_for_episode(self, episode_id: str) -> list[Edge]: ...
+
+    # --- Task lifecycle (L3.1) ---
+
+    def update_task_status(
+        self,
+        episode_id: str,
+        status: str,
+        completed_at: datetime | None = None,
+    ) -> None:
+        """Transition a task's status. ``completed_at`` is set only on
+        ``"done"`` transitions."""
+
+    def query_tasks(
+        self,
+        *,
+        status: str | None = None,
+        priority: str | None = None,
+        gtd_context: str | None = None,
+        deadline_before: datetime | None = None,
+        deadline_after: datetime | None = None,
+    ) -> list[Episode]:
+        """Filter task-kind episodes by lifecycle attributes."""

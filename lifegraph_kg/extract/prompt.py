@@ -138,6 +138,113 @@ Input: {text}
 """
 
 
+TASK_EXTRACTION_PROMPT = """\
+You extract structured information from a personal **task** entry — a
+forward-looking intent the user wants to do. Tasks share most of the
+schema with logs (Person/Place/Project/Topic entities + episode metadata)
+but additionally surface lifecycle-relevant signals.
+
+## Output JSON shape
+
+```
+{{"predicates": ["<verb1>", ...],
+  "body_state": null,
+  "sentiment": null,
+  "energy": null,
+  "entities": [{{"type": "...", "kind": "...", "value": "...", "key": "..."}}],
+  "action_verb": "<the primary verb in imperative form>",
+  "deadline_hint": "<verbatim deadline phrase from the text or null>",
+  "priority_hint": "high"|"medium"|"low"|null,
+  "gtd_context_hint": "@home"|"@work"|"@errands"|"@phone"|null}}
+```
+
+## Task-specific rules
+
+1. ``predicates`` is the imperative verb in normalized lowercase
+   ("email", "buy", "review", "schedule"). Tasks have one primary verb
+   most of the time; multi-action tasks ("email Tao AND update slide")
+   produce multiple predicates.
+
+2. ``action_verb`` is the same as the primary predicate but kept as a
+   first-class field for the lifecycle UI (some tools render the verb
+   prominently).
+
+3. ``deadline_hint`` is a verbatim substring of the source describing
+   timing ("by Friday", "next week", "before EOD", "tomorrow morning").
+   The library parses this into an actual datetime separately — your
+   job is just to surface the phrase.
+
+4. ``priority_hint`` — only set if the source has explicit urgency
+   markers: "URGENT", "ASAP", "high priority", "!!!". Default null.
+
+5. ``gtd_context_hint`` — set if the source explicitly tags a context
+   (@work, @home, @errands, @phone, @computer). Default null.
+
+6. ``body_state``, ``sentiment``, ``energy`` are NOT used for tasks
+   (tasks are intentions, not lived experience). Always null.
+
+7. All other rules from log extraction apply: NEVER TRANSLATE,
+   value MUST be a substring of source, entities use the 4 canonical
+   classes with Topic.kind discriminator.
+
+## Examples
+
+### Example 1 — basic task
+Input: "Email Tao the Q3 report by Friday"
+Output:
+{{"predicates": ["email"], "body_state": null, "sentiment": null, "energy": null,
+  "entities": [
+    {{"type": "Person", "value": "Tao", "key": "tao"}},
+    {{"type": "Topic", "kind": "object", "value": "Q3 report", "key": "q3-report"}}
+  ],
+  "action_verb": "email",
+  "deadline_hint": "by Friday",
+  "priority_hint": null,
+  "gtd_context_hint": null}}
+
+### Example 2 — explicit priority + context
+Input: "URGENT: review @work the security patch before EOD"
+Output:
+{{"predicates": ["review"], "body_state": null, "sentiment": null, "energy": null,
+  "entities": [
+    {{"type": "Topic", "kind": "object", "value": "security patch", "key": "security-patch"}}
+  ],
+  "action_verb": "review",
+  "deadline_hint": "before EOD",
+  "priority_hint": "high",
+  "gtd_context_hint": "@work"}}
+
+### Example 3 — Chinese task
+Input: "明天下午之前给李发邮件确认会议"
+Output:
+{{"predicates": ["email", "confirm"], "body_state": null, "sentiment": null, "energy": null,
+  "entities": [
+    {{"type": "Person", "value": "李", "key": "李"}},
+    {{"type": "Topic", "kind": "general", "value": "会议", "key": "会议"}}
+  ],
+  "action_verb": "email",
+  "deadline_hint": "明天下午之前",
+  "priority_hint": null,
+  "gtd_context_hint": null}}
+
+### Example 4 — recurring chore
+Input: "Buy groceries every Saturday"
+Output:
+{{"predicates": ["buy"], "body_state": null, "sentiment": null, "energy": null,
+  "entities": [
+    {{"type": "Topic", "kind": "general", "value": "groceries", "key": "groceries"}}
+  ],
+  "action_verb": "buy",
+  "deadline_hint": "every Saturday",
+  "priority_hint": null,
+  "gtd_context_hint": "@errands"}}
+
+## Now extract from this input
+
+Input: {text}
+"""
+
+
 CRITIC_PROMPT = """\
 You are validating a personal-knowledge-graph extraction. Check for issues.
 
