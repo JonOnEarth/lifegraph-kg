@@ -145,4 +145,4 @@ pip install 'lifegraph-kg[postgres]'              # + psycopg
 
 ## Name disambiguation
 
-The name "LifeGraph" was previously used in Tominski & Aigner (2020), "LifeGraph: A Visual Analytics System for Personal Data" (ACM). That work is a research artifact, not a product. This package is unrelated.
+The name "LifeGraph" was previously used in Tominski & Aigner (2020), "LifeGraph: A Knowledge Graph for Lifelogs" (ACM). That work is a research artifact, not a product. This package is unrelated.
