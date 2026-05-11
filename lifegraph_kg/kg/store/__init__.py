@@ -79,6 +79,11 @@ class Store(Protocol):
 
     def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None: ...
 
+    def get_entity(self, entity_id: str) -> EntityT | None:
+        """Look up an entity by its primary key (global, encodes user_id).
+        Convenience for callers that have an edge.to_entity in hand and
+        need the typed object without N round-trips through query_entities."""
+
     def query_entities(
         self,
         *,

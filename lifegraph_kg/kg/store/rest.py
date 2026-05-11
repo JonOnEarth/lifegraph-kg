@@ -405,6 +405,10 @@ class RestStore:
 
     # --- entity reads ---
 
+    def get_entity(self, entity_id: str) -> EntityT | None:
+        rows = self._get("/entities", **{"id": f"eq.{entity_id}", "limit": "1"})
+        return _entity_from_row(rows[0]) if rows else None
+
     def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         rows = self._get(
             "/entities",

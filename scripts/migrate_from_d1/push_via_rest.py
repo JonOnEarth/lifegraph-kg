@@ -41,6 +41,7 @@ TABLES = [
         "episodes",
         [
             "id",
+            "user_id",
             "text",
             "occurred_at",
             "ingested_at",
@@ -62,13 +63,24 @@ TABLES = [
     ),
     (
         "entities",
-        ["id", "type", "kind", "key", "value", "attributes_json", "created_at", "canonical_id"],
+        [
+            "id",
+            "user_id",
+            "type",
+            "kind",
+            "key",
+            "value",
+            "attributes_json",
+            "created_at",
+            "canonical_id",
+        ],
         "id",
     ),
     (
         "edges",
         [
             "id",
+            "user_id",
             "from_entity",
             "to_entity",
             "verb",
@@ -83,7 +95,7 @@ TABLES = [
     ),
     (
         "entity_episode_mention",
-        ["entity_id", "episode_id"],
+        ["entity_id", "episode_id", "user_id"],
         "entity_id,episode_id",
     ),
     (

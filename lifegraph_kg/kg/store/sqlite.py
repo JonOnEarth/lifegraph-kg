@@ -370,6 +370,12 @@ class SqliteStore:
 
     # --- entity reads ---
 
+    def get_entity(self, entity_id: str) -> EntityT | None:
+        row = self._conn.execute(
+            "SELECT * FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        return _entity_from_row(row) if row else None
+
     def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         row = self._conn.execute(
             "SELECT * FROM entities WHERE user_id = ? AND type = ? AND key = ?",

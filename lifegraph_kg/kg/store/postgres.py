@@ -423,6 +423,12 @@ class PostgresStore:
 
     # --- entity reads ---
 
+    def get_entity(self, entity_id: str) -> EntityT | None:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM entities WHERE id = %s", (entity_id,))
+            row = cur.fetchone()
+        return _entity_from_row(row) if row else None
+
     def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         with self._conn.cursor() as cur:
             cur.execute(

@@ -58,6 +58,12 @@ def main() -> int:
         default=1.0,
         help="Min seconds between LLM calls (1.0 ≈ 60/min, well under Anthropic limit)",
     )
+    ap.add_argument(
+        "--user-id",
+        required=True,
+        help="The Supabase auth user_id this dump belongs to. Required since "
+             "Phase 6 multi-user — every persisted Episode + Entity carries it.",
+    )
     args = ap.parse_args()
 
     if "ANTHROPIC_API_KEY" not in os.environ:
@@ -112,7 +118,7 @@ def main() -> int:
         source = row.get("source") or "user"
 
         try:
-            ep = lg.log(text, occurred_at=occurred_at, source=source)
+            ep = lg.log(text, user_id=args.user_id, occurred_at=occurred_at, source=source)
             progress[item_id] = {
                 "status": "ok",
                 "episode_id": ep.id,

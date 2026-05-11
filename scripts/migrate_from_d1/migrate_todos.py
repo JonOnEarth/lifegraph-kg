@@ -75,6 +75,11 @@ def main() -> int:
     ap.add_argument("--progress", type=Path, default=DEFAULT_PROGRESS)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--rate-limit-s", type=float, default=1.0)
+    ap.add_argument(
+        "--user-id",
+        required=True,
+        help="Supabase auth user_id for these todos (Phase 6+ scoping).",
+    )
     args = ap.parse_args()
 
     if "ANTHROPIC_API_KEY" not in os.environ:
@@ -143,6 +148,7 @@ def main() -> int:
             ep = lg._persist_task(  # type: ignore[attr-defined]
                 text,
                 result,
+                user_id=args.user_id,
                 occurred_at=occurred_at,
                 source=source,
                 deadline=deadline,
