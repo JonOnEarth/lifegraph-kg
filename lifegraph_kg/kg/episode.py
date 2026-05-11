@@ -64,6 +64,13 @@ class Episode(BaseModel):
     sentiment: Sentiment | None = None
     energy: Energy | None = None
 
+    # Duration (minutes). Either user-stated or AI-inferred from a
+    # conventional activity (meal=30, workout=45, meeting=30, etc.).
+    # ``duration_inferred`` flags the second case so the UI can show
+    # "~30 min" with a tilde, distinguishing from ground-truth.
+    duration: int | None = None
+    duration_inferred: bool | None = None
+
     # Discriminator — defaults to "log" so existing call sites are unchanged
     kind: EpisodeKind = "log"
 

@@ -47,6 +47,14 @@ class ExtractionResult(BaseModel):
     sentiment: Sentiment | None = None
     energy: Energy | None = None
 
+    # Duration in minutes — either user-stated or AI-inferred from a
+    # conventional activity (meal=30, workout=45, meeting=30, call=15-20,
+    # email=10, shower=15, sleep=480, commute=20). ``duration_inferred``
+    # is true when the model fell back to a heuristic so the UI can
+    # render with a tilde ("~30 min").
+    duration: int | None = None
+    duration_inferred: bool | None = None
+
     # The 4-class typed entities. Discriminated union by `type`.
     entities: list[EntityT] = Field(default_factory=list)
 

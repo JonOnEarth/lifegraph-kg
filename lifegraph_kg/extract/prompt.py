@@ -44,9 +44,23 @@ episode metadata. No Activity class.
                  "felt great" → "pos". "感到失落" → "neg". "效率一般" → "neu".
 - `energy`     — energy level ONLY if explicitly signaled. "high"/"medium"/"low"
                  /null. Default null. "激情" → "high". "累了" → "low".
+- `duration`   — minutes the entry took. Trust the text: convert any
+                 stated duration in any language ("30分钟", "half an hour",
+                 "1h", "26:14") to integer minutes. If the user did NOT
+                 state a duration but the activity has a conventional one,
+                 fall back to a calibration anchor and set
+                 ``duration_inferred=true``. Anchors:
+                   meal=30, workout=45, meeting=30, call=15-20, email=10,
+                   errand=30, shower=15, sleep=480, commute=20.
+                 Pure observations / emotions / open-ended thinking → null
+                 (and duration_inferred must also be null — never set
+                 duration_inferred=true with duration=null).
+- `duration_inferred` — true when ``duration`` came from a calibration
+                        anchor (UI renders "~30 min"). False when the
+                        user explicitly stated it. Null when duration is
+                        null.
 
-These DO NOT become entities. Body/affect words go in metadata fields,
-never in entities.
+Sentiment / energy / duration DO NOT become entities. They're metadata.
 
 ## Output JSON shape (no preamble, no fences)
 
@@ -55,6 +69,8 @@ never in entities.
   "body_state": "<state>"|null,
   "sentiment": "pos"|"neu"|"neg"|null,
   "energy": "high"|"medium"|"low"|null,
+  "duration": <minutes int>|null,
+  "duration_inferred": true|false|null,
   "entities": [
      {{"type": "Person|Place|Project|Topic", "kind": "<discriminator>"|null,
        "value": "<verbatim surface form>", "key": "<lowercase canonical>"}}
@@ -74,30 +90,33 @@ never in entities.
 
 ## Few-shot examples
 
-### Example 1 — single action, social
+### Example 1 — single action, social, inferred duration
 Input: "Met Alex at Blue Bottle for coffee. Felt energized."
 Output:
 {{"predicates": ["met"], "body_state": "energized", "sentiment": "pos", "energy": "high",
+  "duration": 30, "duration_inferred": true,
   "entities": [
     {{"type": "Person", "value": "Alex", "key": "alex"}},
     {{"type": "Place", "value": "Blue Bottle", "key": "blue-bottle"}},
     {{"type": "Topic", "kind": "food", "value": "coffee", "key": "coffee"}}
   ]}}
 
-### Example 2 — multi-action, work, no affect cue
+### Example 2 — multi-action, work, no duration cue
 Input: "查看 gene list 并为 Matt 标出重要的 gene"
 Output:
 {{"predicates": ["reviewed", "annotated"], "body_state": null, "sentiment": null, "energy": null,
+  "duration": null, "duration_inferred": null,
   "entities": [
     {{"type": "Person", "value": "Matt", "key": "matt"}},
     {{"type": "Topic", "kind": "general", "value": "gene list", "key": "gene-list"}},
     {{"type": "Topic", "kind": "general", "value": "gene", "key": "gene"}}
   ]}}
 
-### Example 3 — Chinese, body state
+### Example 3 — Chinese, body state, no duration
 Input: "累了，回家喂小猫并休息一会儿"
 Output:
 {{"predicates": ["went-home", "fed", "rested"], "body_state": "累了", "sentiment": null, "energy": "low",
+  "duration": null, "duration_inferred": null,
   "entities": [
     {{"type": "Topic", "kind": "general", "value": "小猫", "key": "小猫"}}
   ]}}
@@ -106,6 +125,7 @@ Output:
 Input: "刚刚更新了slide for rise star presentation, 并邮件联系了Tao更改摘要"
 Output:
 {{"predicates": ["updated", "emailed"], "body_state": null, "sentiment": null, "energy": null,
+  "duration": null, "duration_inferred": null,
   "entities": [
     {{"type": "Project", "value": "rise star presentation", "key": "rise-star-presentation"}},
     {{"type": "Person", "value": "Tao", "key": "tao"}},
@@ -113,19 +133,31 @@ Output:
     {{"type": "Topic", "kind": "idea", "value": "摘要", "key": "摘要"}}
   ]}}
 
-### Example 5 — explicit affect signal
-Input: "激情改文章并发送给老板"
+### Example 5 — explicit affect signal, stated duration
+Input: "激情改文章一个小时并发送给老板"
 Output:
 {{"predicates": ["revised", "sent"], "body_state": null, "sentiment": "pos", "energy": "high",
+  "duration": 60, "duration_inferred": false,
   "entities": [
     {{"type": "Person", "value": "老板", "key": "老板"}},
     {{"type": "Topic", "kind": "general", "value": "文章", "key": "文章"}}
   ]}}
 
-### Example 6 — neutral activity, no affect inference
+### Example 5b — stated duration in English
+Input: "30-min coffee with Sarah this morning"
+Output:
+{{"predicates": ["had"], "body_state": null, "sentiment": null, "energy": null,
+  "duration": 30, "duration_inferred": false,
+  "entities": [
+    {{"type": "Person", "value": "Sarah", "key": "sarah"}},
+    {{"type": "Topic", "kind": "food", "value": "coffee", "key": "coffee"}}
+  ]}}
+
+### Example 6 — neutral activity, inferred meal duration
 Input: "Had ramen with Sara at Ippudo"
 Output:
 {{"predicates": ["ate"], "body_state": null, "sentiment": null, "energy": null,
+  "duration": 30, "duration_inferred": true,
   "entities": [
     {{"type": "Person", "value": "Sara", "key": "sara"}},
     {{"type": "Place", "value": "Ippudo", "key": "ippudo"}},

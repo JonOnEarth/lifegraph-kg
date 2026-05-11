@@ -450,6 +450,8 @@ class LifeGraph:
             body_state=extraction.body_state,
             sentiment=extraction.sentiment,
             energy=extraction.energy,
+            duration=extraction.duration,
+            duration_inferred=extraction.duration_inferred,
         )
 
         # Two-phase save: episode + entities first (so entity IDs are
@@ -540,6 +542,8 @@ class LifeGraph:
             body_state=extraction.body_state,
             sentiment=extraction.sentiment,
             energy=extraction.energy,
+            duration=extraction.duration,
+            duration_inferred=extraction.duration_inferred,
             kind="task",
             status="active",
             priority=priority,  # type: ignore[arg-type]

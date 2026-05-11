@@ -28,7 +28,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 # The latest schema version. Bump in lockstep with adding a new
 # `00NN_name.sql` migration file. The runner applies only migrations
 # with version > current_version, so old DBs migrate forward.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _to_ms(dt: datetime) -> int:
@@ -88,6 +88,9 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
     def _get(field: str, default: object = None) -> object:
         return row[field] if field in keys else default
 
+    # SQLite stores BOOLEAN as 0/1 INTEGER. Translate to Python bool|None.
+    di_raw = _get("duration_inferred")
+    di: bool | None = None if di_raw is None else bool(di_raw)
     return Episode(
         id=row["id"],
         user_id=_get("user_id") or _LEGACY_USER,  # type: ignore[arg-type]
@@ -99,6 +102,8 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
         body_state=row["body_state"],
         sentiment=row["sentiment"],
         energy=row["energy"],
+        duration=_get("duration"),  # type: ignore[arg-type]
+        duration_inferred=di,
         kind=_get("kind", "log") or "log",  # type: ignore[arg-type]
         status=_get("status", "active") or "active",  # type: ignore[arg-type]
         priority=_get("priority"),  # type: ignore[arg-type]
@@ -202,10 +207,11 @@ class SqliteStore:
             self._conn.execute(
                 """INSERT INTO episodes (id, user_id, text, occurred_at, ingested_at, source,
                                           predicates, body_state, sentiment, energy,
+                                          duration, duration_inferred,
                                           kind, status, priority, deadline,
                                           completed_at, recurrence, gtd_context,
                                           action_verb)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     episode.id,
                     uid,
@@ -217,6 +223,8 @@ class SqliteStore:
                     episode.body_state,
                     episode.sentiment,
                     episode.energy,
+                    episode.duration,
+                    None if episode.duration_inferred is None else (1 if episode.duration_inferred else 0),
                     episode.kind,
                     episode.status,
                     episode.priority,
