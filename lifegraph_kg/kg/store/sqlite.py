@@ -28,7 +28,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 # The latest schema version. Bump in lockstep with adding a new
 # `00NN_name.sql` migration file. The runner applies only migrations
 # with version > current_version, so old DBs migrate forward.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _to_ms(dt: datetime) -> int:
@@ -104,6 +104,11 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
         energy=row["energy"],
         duration=_get("duration"),  # type: ignore[arg-type]
         duration_inferred=di,
+        origin_tz=_get("origin_tz"),  # type: ignore[arg-type]
+        time_mode=_get("time_mode"),  # type: ignore[arg-type]
+        wall_clock_hour=_get("wall_clock_hour"),  # type: ignore[arg-type]
+        wall_clock_minute=_get("wall_clock_minute"),  # type: ignore[arg-type]
+        wall_clock_date=_get("wall_clock_date"),  # type: ignore[arg-type]
         kind=_get("kind", "log") or "log",  # type: ignore[arg-type]
         status=_get("status", "active") or "active",  # type: ignore[arg-type]
         priority=_get("priority"),  # type: ignore[arg-type]
@@ -208,10 +213,12 @@ class SqliteStore:
                 """INSERT INTO episodes (id, user_id, text, occurred_at, ingested_at, source,
                                           predicates, body_state, sentiment, energy,
                                           duration, duration_inferred,
+                                          origin_tz, time_mode,
+                                          wall_clock_hour, wall_clock_minute, wall_clock_date,
                                           kind, status, priority, deadline,
                                           completed_at, recurrence, gtd_context,
                                           action_verb)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     episode.id,
                     uid,
@@ -225,6 +232,11 @@ class SqliteStore:
                     episode.energy,
                     episode.duration,
                     None if episode.duration_inferred is None else (1 if episode.duration_inferred else 0),
+                    episode.origin_tz,
+                    episode.time_mode,
+                    episode.wall_clock_hour,
+                    episode.wall_clock_minute,
+                    episode.wall_clock_date,
                     episode.kind,
                     episode.status,
                     episode.priority,

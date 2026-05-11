@@ -39,6 +39,17 @@ EpisodeKind = Literal["log", "task"]
 EpisodeStatus = Literal["active", "done", "dropped"]
 Priority = Literal["high", "medium", "low"]
 
+# Timezone mode for tasks. Logs are always implicitly "absolute" (the
+# event happened at a fixed physical moment) and leave this null.
+#
+#   absolute → "May 15, 3pm meeting with Tom" — UTC-fixed; reschedule
+#              doesn't follow the user across timezones.
+#   floating → "Every day at 8am meditate" — interpreted in the user's
+#              CURRENT timezone at fire time; follows them around.
+#
+# See docs: §3.2 / §3.3 + §5.3 dispatcher.
+TimeMode = Literal["absolute", "floating"]
+
 
 class Episode(BaseModel):
     """A persisted life-log entry or task.
@@ -70,6 +81,20 @@ class Episode(BaseModel):
     # "~30 min" with a tilde, distinguishing from ground-truth.
     duration: int | None = None
     duration_inferred: bool | None = None
+
+    # Timezone handling. Per the docs §3 model: store IANA names never
+    # offsets so we cover DST + historical rule changes. ``origin_tz``
+    # is audit-truth for "where the user was" — useful even on logs
+    # ("oh right I was in Tokyo when I had that ramen").
+    #
+    # Tasks additionally carry ``time_mode``. floating tasks defer
+    # their fire time to the user's CURRENT tz at scheduler time and
+    # store the wall-clock spec instead of a UTC instant.
+    origin_tz: str | None = None
+    time_mode: TimeMode | None = None
+    wall_clock_hour: int | None = None     # 0-23
+    wall_clock_minute: int | None = None   # 0-59
+    wall_clock_date: str | None = None     # "MM-DD" (yearly) or None
 
     # Discriminator — defaults to "log" so existing call sites are unchanged
     kind: EpisodeKind = "log"

@@ -412,6 +412,9 @@ class LifeGraph:
         user_id: str,
         occurred_at: datetime | None = None,
         source: str = "user",
+        origin_tz: str | None = None,
+        now_iso: str | None = None,
+        user_timezone: str | None = None,
     ) -> Episode:
         """Extract entities + persist as an Episode scoped to ``user_id``.
 
@@ -419,10 +422,26 @@ class LifeGraph:
         in the extraction, an edge is written with from_entity=NULL,
         verb=predicate, to_entity=entity.id, all bi-temporal anchors set
         from ``occurred_at``.
+
+        ``now_iso`` + ``user_timezone`` are forwarded to the extraction
+        prompt as a ``<user_context>`` block so relative dates resolve
+        in the user's wall-clock frame (matters for "明天", "next week"
+        etc.). If omitted, the extractor still runs but relative cues
+        resolve against UTC.
         """
-        result = extract(text, llm=self._llm)
+        result = extract(
+            text,
+            llm=self._llm,
+            now_iso=now_iso,
+            user_timezone=user_timezone or origin_tz,
+        )
         return self.persist(
-            text, result, user_id=user_id, occurred_at=occurred_at, source=source
+            text,
+            result,
+            user_id=user_id,
+            occurred_at=occurred_at,
+            source=source,
+            origin_tz=origin_tz,
         )
 
     def persist(
@@ -433,12 +452,18 @@ class LifeGraph:
         user_id: str,
         occurred_at: datetime | None = None,
         source: str = "user",
+        origin_tz: str | None = None,
     ) -> Episode:
         """Persist a pre-extracted result as an Episode scoped to ``user_id``."""
         now = datetime.now(UTC)
         # Re-stamp entities with the request's user_id — the extractor
         # may default to a placeholder; the trust boundary is the caller.
         scoped_entities = [e.model_copy(update={"user_id": user_id}) for e in extraction.entities]
+        # Logs are always implicitly absolute (past events). The
+        # extractor leaves time_mode null on logs; we keep it null in
+        # the Episode too. Only ``persist_task`` writes time_mode +
+        # wall_clock_* (and even there only when the extractor surfaced
+        # a forward-looking intent).
         ep = Episode(
             id=_new_id(),
             user_id=user_id,
@@ -452,6 +477,8 @@ class LifeGraph:
             energy=extraction.energy,
             duration=extraction.duration,
             duration_inferred=extraction.duration_inferred,
+            origin_tz=origin_tz,
+            time_mode=None,
         )
 
         # Two-phase save: episode + entities first (so entity IDs are
@@ -497,9 +524,24 @@ class LifeGraph:
         action_verb: str | None = None,
         occurred_at: datetime | None = None,
         source: str = "user",
+        origin_tz: str | None = None,
+        now_iso: str | None = None,
+        user_timezone: str | None = None,
     ) -> Episode:
-        """Create a task scoped to ``user_id``."""
-        result = extract(text, llm=self._llm)
+        """Create a task scoped to ``user_id``.
+
+        ``now_iso`` + ``user_timezone`` are forwarded into the extraction
+        prompt's ``<user_context>`` block. This is critical for tasks:
+        "tomorrow 8am" must resolve in the user's TZ, not UTC, otherwise
+        a Tokyo user creating "明天 8 点" gets the wall-clock anchor
+        offset by ~9-13 hours.
+        """
+        result = extract(
+            text,
+            llm=self._llm,
+            now_iso=now_iso,
+            user_timezone=user_timezone or origin_tz,
+        )
         return self._persist_task(
             text,
             result,
@@ -511,6 +553,7 @@ class LifeGraph:
             gtd_context=gtd_context,
             recurrence=recurrence,
             action_verb=action_verb,
+            origin_tz=origin_tz,
         )
 
     def _persist_task(
@@ -526,11 +569,25 @@ class LifeGraph:
         gtd_context: str | None = None,
         recurrence: str | None = None,
         action_verb: str | None = None,
+        origin_tz: str | None = None,
     ) -> Episode:
         """Internal — persist a task with the same two-phase save as
-        ``persist()`` but with task-flavored metadata + kind='task'."""
+        ``persist()`` but with task-flavored metadata + kind='task'.
+
+        Timezone semantics: ``origin_tz`` is the IANA name of where the
+        user was when creating this task. ``time_mode`` + wall_clock_*
+        come from the extractor (the v6 prompt's §time_mode rules) —
+        absolute tasks anchor a UTC moment via deadline; floating
+        tasks fire at wall-clock time in the user's current TZ.
+        """
         now = datetime.now(UTC)
         scoped_entities = [e.model_copy(update={"user_id": user_id}) for e in extraction.entities]
+        # Default time_mode to 'absolute' for tasks if the extractor
+        # didn't surface one — matches the doc's §4 "when in doubt,
+        # absolute" safer-default rule. Wall-clock fields stay null
+        # unless the extractor said floating.
+        ext_mode = extraction.time_mode
+        is_floating = ext_mode == "floating"
         ep = Episode(
             id=_new_id(),
             user_id=user_id,
@@ -544,6 +601,11 @@ class LifeGraph:
             energy=extraction.energy,
             duration=extraction.duration,
             duration_inferred=extraction.duration_inferred,
+            origin_tz=origin_tz,
+            time_mode=ext_mode or "absolute",
+            wall_clock_hour=extraction.wall_clock_hour if is_floating else None,
+            wall_clock_minute=extraction.wall_clock_minute if is_floating else None,
+            wall_clock_date=extraction.wall_clock_date if is_floating else None,
             kind="task",
             status="active",
             priority=priority,  # type: ignore[arg-type]

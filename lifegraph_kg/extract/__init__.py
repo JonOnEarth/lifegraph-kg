@@ -69,20 +69,61 @@ def _coerce_entities(raw: list[Any]) -> list[EntityT]:
     return out
 
 
-def extract(text: str, *, llm: LlmClient | None = None) -> ExtractionResult:
+def _user_context_block(now_iso: str | None, user_timezone: str | None) -> str:
+    """Render the <user_context> block per the timezone design doc §7.1.
+
+    The model needs both UTC and user-local time so relative cues like
+    "tomorrow", "明天", "next week" resolve against the user's wall
+    clock, not the server's. Empty string when neither is provided.
+    """
+    if not now_iso and not user_timezone:
+        return ""
+    lines = []
+    if now_iso:
+        lines.append(f"current_utc: {now_iso}")
+    if user_timezone:
+        lines.append(f"user_timezone: {user_timezone}")
+        if now_iso:
+            try:
+                from datetime import datetime
+                from zoneinfo import ZoneInfo
+
+                dt = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+                local = dt.astimezone(ZoneInfo(user_timezone))
+                lines.append(
+                    f"user_local_time: {local.strftime('%Y-%m-%d %H:%M')}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+    inner = "\n".join(lines)
+    return f"<user_context>\n{inner}\n</user_context>\n\n"
+
+
+def extract(
+    text: str,
+    *,
+    llm: LlmClient | None = None,
+    now_iso: str | None = None,
+    user_timezone: str | None = None,
+) -> ExtractionResult:
     """Extract a personal-KG ExtractionResult from `text`.
 
     Returns an ExtractionResult with episode metadata + 4-class entities,
     plus diagnostic fields (`substring_violations`, `critic_issues`)
     showing what was rejected and why.
 
+    ``now_iso`` + ``user_timezone`` get prepended as a <user_context>
+    block so the model can resolve relative dates ("tomorrow",
+    "next Friday", "明天下午") in the user's wall-clock frame.
+
     Pass `llm=` to inject a mock for testing.
     """
     client = llm or default_client()
 
     # 1. Extractor pass
+    prompt = _user_context_block(now_iso, user_timezone) + EXTRACTION_PROMPT.format(text=text)
     body = client.chat(
-        EXTRACTION_PROMPT.format(text=text),
+        prompt,
         model=EXTRACTOR_MODEL,
         max_tokens=2048,
         temperature=0.0,
@@ -119,6 +160,12 @@ def extract(text: str, *, llm: LlmClient | None = None) -> ExtractionResult:
         body_state=parsed.get("body_state"),
         sentiment=parsed.get("sentiment"),
         energy=parsed.get("energy"),
+        duration=parsed.get("duration"),
+        duration_inferred=parsed.get("duration_inferred"),
+        time_mode=parsed.get("time_mode"),
+        wall_clock_hour=parsed.get("wall_clock_hour"),
+        wall_clock_minute=parsed.get("wall_clock_minute"),
+        wall_clock_date=parsed.get("wall_clock_date"),
         entities=entities,
         substring_violations=violations,
         critic_issues=verdict.issues,

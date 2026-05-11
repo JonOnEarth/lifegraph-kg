@@ -55,6 +55,18 @@ class ExtractionResult(BaseModel):
     duration: int | None = None
     duration_inferred: bool | None = None
 
+    # Timezone / time-mode (see timezone design doc):
+    # - logs: ``time_mode`` is null (past events are always absolute);
+    #   ``origin_tz`` is "where the user was".
+    # - tasks: ``time_mode`` is absolute | floating. floating tasks
+    #   omit a fixed deadline and instead carry the wall-clock spec.
+    # The extractor receives ``current_utc`` + ``user_timezone`` in the
+    # prompt context and infers per §4 rules.
+    time_mode: Literal["absolute", "floating"] | None = None
+    wall_clock_hour: int | None = None
+    wall_clock_minute: int | None = None
+    wall_clock_date: str | None = None
+
     # The 4-class typed entities. Discriminated union by `type`.
     entities: list[EntityT] = Field(default_factory=list)
 
