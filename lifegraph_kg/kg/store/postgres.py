@@ -149,6 +149,7 @@ _LEGACY_USER = ""
 def _entity_from_row(row: dict[str, Any]) -> EntityT:
     type_ = row["type"]
     common = {
+        "id": row.get("id"),
         "user_id": row.get("user_id") or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
@@ -735,6 +736,14 @@ class PostgresStore:
         with self._conn.cursor() as cur:
             cur.execute(sql, params)
             return [_episode_from_row(r) for r in cur.fetchall()]
+
+    def mentions_for_user(self, user_id: str) -> list[tuple[str, str]]:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT entity_id, episode_id FROM entity_episode_mention WHERE user_id = %s",
+                (user_id,),
+            )
+            return [(r["entity_id"], r["episode_id"]) for r in cur.fetchall()]
 
     # --- introspection ---
 

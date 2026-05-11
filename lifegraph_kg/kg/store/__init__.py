@@ -159,3 +159,8 @@ class Store(Protocol):
     ) -> list[Episode]:
         """Bulk-list episodes for a user with optional kind/status/since
         filters. Used by the frontend sync route. Most-recent first."""
+
+    def mentions_for_user(self, user_id: str) -> list[tuple[str, str]]:
+        """Return all (entity_id, episode_id) pairs for ``user_id``.
+        Used by sync/list paths to build a per-episode entities map in
+        a single round-trip instead of N find_entity_id calls."""

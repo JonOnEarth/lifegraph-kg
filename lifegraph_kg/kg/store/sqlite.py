@@ -58,9 +58,11 @@ _LEGACY_USER = ""
 
 
 def _entity_from_row(row: sqlite3.Row) -> EntityT:
-    """Reconstruct a typed entity from a DB row."""
+    """Reconstruct a typed entity from a DB row, populating ``id`` so
+    callers can build (id → Entity) maps without round-tripping."""
     type_ = row["type"]
     common = {
+        "id": row["id"],
         "user_id": row["user_id"] or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
@@ -679,6 +681,15 @@ class SqliteStore:
             params.append(limit)
             params.append(offset)
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
+
+    def mentions_for_user(self, user_id: str) -> list[tuple[str, str]]:
+        """All (entity_id, episode_id) pairs for ``user_id`` — single
+        SELECT, in-memory join in the caller."""
+        rows = self._conn.execute(
+            "SELECT entity_id, episode_id FROM entity_episode_mention WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+        return [(r["entity_id"], r["episode_id"]) for r in rows]
 
     # --- introspection ---
 

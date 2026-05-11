@@ -63,6 +63,10 @@ class Entity(BaseModel):
     # request user_id before write. Production reads see the real
     # user_id from the DB row.
     user_id: str = ""
+    # Optional row id — populated by Store reads, not required at
+    # construction. Lets bulk-list paths build (id → Entity) maps
+    # without N round-trips through find_entity_id.
+    id: str | None = None
     type: str
     key: str
     value: str

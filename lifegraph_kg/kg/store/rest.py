@@ -71,6 +71,7 @@ _LEGACY_USER = ""
 def _entity_from_row(row: dict[str, Any]) -> EntityT:
     type_ = row["type"]
     common = {
+        "id": row.get("id"),
         "user_id": row.get("user_id") or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
@@ -682,6 +683,13 @@ class RestStore:
         if offset:
             q["offset"] = str(offset)
         return [_episode_from_row(r) for r in self._get("/episodes", **q)]
+
+    def mentions_for_user(self, user_id: str) -> list[tuple[str, str]]:
+        rows = self._get(
+            "/entity_episode_mention",
+            **{"user_id": f"eq.{user_id}", "select": "entity_id,episode_id"},
+        )
+        return [(r["entity_id"], r["episode_id"]) for r in rows]
 
     def close(self) -> None:
         self._client.close()
