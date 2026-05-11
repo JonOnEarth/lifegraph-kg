@@ -4,10 +4,19 @@
 The `Store` Protocol defines the minimal operation set every backend
 must implement. The library never touches a backend directly — all
 persistence flows through this protocol so swapping SQLite for
-Postgres / PGlite is one config change.
+Postgres / PGlite / PostgREST is one config change.
 
-L2 ships SQLite. Postgres lands in L4. Native graph traversal (Cypher
-path queries) lands in v0.2 via Apache AGE on Postgres — same DSN.
+**Multi-tenant (Phase 6+)** — every write carries ``user_id`` on the
+domain model (Episode.user_id / Entity.user_id / Edge.user_id) and
+every query takes a ``user_id`` kwarg. The dedup boundary for
+entities is ``(user_id, type, key)`` so two users with a friend
+named "Sara" get distinct Person rows.
+
+Methods that operate on a specific row by primary key (``get_episode``,
+``edges_for_episode``, ``invalidate_edge``, ``update_task_status``)
+take just the ID — the ID itself encodes the user. Methods that
+filter/scan (``episodes_since``, ``query_entities``, ``query_tasks``,
+``edges_as_of``) require explicit ``user_id``.
 """
 
 from __future__ import annotations
@@ -22,12 +31,7 @@ from lifegraph_kg.kg.episode import Episode
 
 
 class Store(Protocol):
-    """Minimal contract every storage driver implements.
-
-    The methods are deliberately low-level — `save_episode` takes an
-    Episode + entities + edges as a unit, and the higher-level
-    `LifeGraph` API composes calls into these primitives.
-    """
+    """Minimal contract every storage driver implements."""
 
     def init_schema(self) -> None:
         """Apply migrations (idempotent)."""
@@ -39,38 +43,46 @@ class Store(Protocol):
         edges: list[Edge],
     ) -> None:
         """Atomically persist an episode + dedup entities + write edges
-        + record entity↔episode mentions."""
+        + record entity↔episode mentions. user_id comes from
+        episode.user_id (and must match entities/edges)."""
 
     def add_edges(self, edges: list[Edge]) -> None:
-        """Atomically insert a batch of edges. Used by the LifeGraph
-        facade's two-phase save (episode + entities first, then edges
-        once entity IDs are known)."""
+        """Atomically insert a batch of edges (each carries its own
+        user_id). Used by the LifeGraph facade's two-phase save."""
 
-    def find_entity_id(self, type_: str, key: str) -> str | None:
-        """Resolve `(type, key)` to the stored entity's ID, or None."""
+    def find_entity_id(self, type_: str, key: str, *, user_id: str) -> str | None:
+        """Resolve `(user_id, type, key)` to the stored entity's ID, or None."""
 
     # --- Episode reads ---
 
     def get_episode(self, episode_id: str) -> Episode | None: ...
 
-    def episodes_since(self, t: datetime, limit: int | None = None) -> list[Episode]: ...
-
-    def episodes_between(
-        self, start: datetime, end: datetime, limit: int | None = None
+    def episodes_since(
+        self, t: datetime, *, user_id: str, limit: int | None = None
     ) -> list[Episode]: ...
 
-    def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]: ...
+    def episodes_between(
+        self, start: datetime, end: datetime, *, user_id: str, limit: int | None = None
+    ) -> list[Episode]: ...
+
+    def episodes_mentioning(
+        self, entity_id: str, *, limit: int | None = None
+    ) -> list[Episode]:
+        """Entity IDs are globally unique and encode their user_id
+        implicitly via the entity row; no separate user_id arg needed."""
 
     def episodes_mentioning_any(
-        self, entity_ids: list[str], limit: int | None = None
+        self, entity_ids: list[str], *, limit: int | None = None
     ) -> list[Episode]: ...
 
     # --- Entity reads ---
 
-    def find_entity(self, type_: str, key: str) -> EntityT | None: ...
+    def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None: ...
 
     def query_entities(
         self,
+        *,
+        user_id: str,
         type_: str | None = None,
         kind: str | None = None,
         key: str | None = None,
@@ -78,14 +90,11 @@ class Store(Protocol):
 
     # --- Bi-temporal CRUD ---
 
-    def invalidate_edge(self, edge_id: str, t_invalid: datetime) -> None:
-        """Mark an edge as no longer valid as of `t_invalid`. The edge
-        survives in the DB; only `t_invalid` is set. This preserves the
-        audit trail."""
+    def invalidate_edge(self, edge_id: str, t_invalid: datetime) -> None: ...
 
-    def edges_as_of(self, t: datetime, *, verb: str | None = None) -> list[Edge]:
-        """Return edges that were valid at time `t`. Used for
-        time-travel queries: 'what did I think was true on 2025-12-01?'"""
+    def edges_as_of(
+        self, t: datetime, *, user_id: str, verb: str | None = None
+    ) -> list[Edge]: ...
 
     def edges_for_episode(self, episode_id: str) -> list[Edge]: ...
 
@@ -96,17 +105,15 @@ class Store(Protocol):
         episode_id: str,
         status: str,
         completed_at: datetime | None = None,
-    ) -> None:
-        """Transition a task's status. ``completed_at`` is set only on
-        ``"done"`` transitions."""
+    ) -> None: ...
 
     def query_tasks(
         self,
         *,
+        user_id: str,
         status: str | None = None,
         priority: str | None = None,
         gtd_context: str | None = None,
         deadline_before: datetime | None = None,
         deadline_after: datetime | None = None,
-    ) -> list[Episode]:
-        """Filter task-kind episodes by lifecycle attributes."""
+    ) -> list[Episode]: ...

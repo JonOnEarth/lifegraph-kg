@@ -28,6 +28,8 @@ from lifegraph_kg import LifeGraph, Person, Place, Topic
 from lifegraph_kg.kg.edge import Edge
 from lifegraph_kg.kg.episode import Episode
 
+TEST_USER = "test-user"
+
 POSTGRES_URL = os.environ.get("LIFEGRAPH_TEST_POSTGRES_URL")
 
 T0 = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
@@ -164,7 +166,7 @@ def test_postgres_entity_dedup_by_type_and_key(fresh_pg_store) -> None:  # type:
         entities=[sara],
         edges=[],
     )
-    rows = s.query_entities(type_="Person", key="sara")
+    rows = s.query_entities(type_="Person", key="sara", user_id=TEST_USER)
     assert len(rows) == 1
 
 
@@ -182,7 +184,7 @@ def test_postgres_episodes_mentioning(fresh_pg_store) -> None:  # type: ignore[n
         entities=[Person(value="Tao", key="tao")],
         edges=[],
     )
-    sara_id = s.find_entity_id("Person", "sara")
+    sara_id = s.find_entity_id("Person", "sara", user_id=TEST_USER)
     assert sara_id is not None
     eps = s.episodes_mentioning(sara_id)
     assert {e.id for e in eps} == {"ep-1"}
@@ -201,7 +203,7 @@ def test_postgres_episodes_since_orders_by_time(fresh_pg_store) -> None:  # type
         entities=[],
         edges=[],
     )
-    eps = s.episodes_since(T0 - timedelta(days=1))
+    eps = s.episodes_since(T0 - timedelta(days=1), user_id=TEST_USER)
     assert [e.id for e in eps] == ["new", "old"]
 
 
@@ -222,8 +224,8 @@ def test_postgres_invalidate_edge_supersede(fresh_pg_store) -> None:  # type: ig
     )
     s.save_episode(ep1, entities=[sara, berlin], edges=[])
 
-    sara_id = s.find_entity_id("Person", "sara")
-    berlin_id = s.find_entity_id("Place", "berlin")
+    sara_id = s.find_entity_id("Person", "sara", user_id=TEST_USER)
+    berlin_id = s.find_entity_id("Place", "berlin", user_id=TEST_USER)
     assert sara_id and berlin_id
 
     edge = Edge(
@@ -253,7 +255,7 @@ def test_postgres_invalidate_edge_supersede(fresh_pg_store) -> None:  # type: ig
     )
 
     # Pre-move query
-    facts_dec = s.edges_as_of(datetime(2025, 12, 1, tzinfo=UTC), verb="lives_in")
+    facts_dec = s.edges_as_of(datetime(2025, 12, 1, tzinfo=UTC), verb="lives_in", user_id=TEST_USER)
     assert len(facts_dec) == 1
     assert facts_dec[0].to_entity == berlin_id
 
@@ -299,9 +301,9 @@ def test_postgres_lifegraph_end_to_end() -> None:
             cur.execute(f"DELETE FROM {t}")
     lg._store._conn.commit()
 
-    ep = lg.log("Had ramen with Sara at Ippudo", occurred_at=T1)
+    ep = lg.log("Had ramen with Sara at Ippudo", occurred_at=T1, user_id=TEST_USER)
     assert ep.predicates == ["ate"]
-    sara = lg.query(Person, key="sara").one()
+    sara = lg.query(Person, key="sara", user_id=TEST_USER).one()
     assert sara.value == "Sara"
     eps = lg.episodes.mentioning(sara)
     assert len(eps) == 1

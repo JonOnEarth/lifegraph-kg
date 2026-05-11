@@ -32,11 +32,18 @@ from pydantic import BaseModel, ConfigDict
 
 
 class Edge(BaseModel):
-    """A bi-temporal edge between (optional) `from_entity` and `to_entity`."""
+    """A bi-temporal edge between (optional) `from_entity` and `to_entity`.
+
+    ``user_id`` is denormalized onto every edge so user-scoped queries
+    don't need to JOIN through entities / episodes. It must always
+    equal the user_id of the referenced episode + entities; the store
+    layer enforces that invariant on write.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     id: str
+    user_id: str
     from_entity: str | None  # NULL == the user / me
     to_entity: str
     verb: str

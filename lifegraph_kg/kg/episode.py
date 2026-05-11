@@ -54,6 +54,7 @@ class Episode(BaseModel):
 
     # Common to logs + tasks
     id: str
+    user_id: str
     text: str
     occurred_at: datetime
     ingested_at: datetime

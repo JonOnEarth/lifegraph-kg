@@ -96,17 +96,29 @@ class _EpisodeView:
     def get(self, episode_id: str) -> Episode | None:
         return self._store.get_episode(episode_id)
 
-    def since(self, t: datetime, *, limit: int | None = None) -> list[Episode]:
-        return self._store.episodes_since(t, limit=limit)
+    def since(
+        self, t: datetime, *, user_id: str, limit: int | None = None
+    ) -> list[Episode]:
+        return self._store.episodes_since(t, user_id=user_id, limit=limit)
 
-    def between(self, start: datetime, end: datetime, *, limit: int | None = None) -> list[Episode]:
+    def between(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        user_id: str,
+        limit: int | None = None,
+    ) -> list[Episode]:
         """Episodes with occurred_at in [start, end]. Inclusive both ends."""
-        return self._store.episodes_between(start, end, limit=limit)
+        return self._store.episodes_between(start, end, user_id=user_id, limit=limit)
 
     def mentioning(self, entity: Entity | str, *, limit: int | None = None) -> list[Episode]:
-        """Episodes that mention `entity` (by Entity object or by id)."""
+        """Episodes that mention `entity` (by Entity object or by id).
+        entity.user_id (or the entity_id's owning user) defines the scope."""
         if isinstance(entity, Entity):
-            ent_id = self._store.find_entity_id(entity.type, entity.key)
+            ent_id = self._store.find_entity_id(
+                entity.type, entity.key, user_id=entity.user_id
+            )
             if ent_id is None:
                 return []
             return self._store.episodes_mentioning(ent_id, limit=limit)
@@ -147,16 +159,13 @@ class _EntityQuery:
         most-recent first.
 
         Examples:
-            # All episodes mentioning a specific person
-            sara = lg.query(Person, key="sara").one()
-            lg.query(Person, key="sara").episodes()
-
-            # All episodes that mention any food (a personal eating timeline)
-            lg.query(Topic, kind="food").episodes()
+            sara = lg.query(Person, user_id=u, key="sara").one()
+            lg.query(Person, user_id=u, key="sara").episodes()
+            lg.query(Topic, user_id=u, kind="food").episodes()
         """
         ids: list[str] = []
         for e in self._entities:
-            ent_id = self._store.find_entity_id(e.type, e.key)
+            ent_id = self._store.find_entity_id(e.type, e.key, user_id=e.user_id)
             if ent_id is not None:
                 ids.append(ent_id)
         return self._store.episodes_mentioning_any(ids, limit=limit)
@@ -183,31 +192,25 @@ class _HygieneOps:
     def propose(
         self,
         *,
+        user_id: str,
         type_: str | None = None,
         kind: str | None = None,
         record: bool = False,
     ) -> list[MergeProposal]:
-        """Run heuristic dedup over the entity set.
-
-        Args:
-            type_:  restrict to a specific entity type (Person / Place / Project / Topic)
-            kind:   restrict to a specific Topic kind (food / media / etc.)
-            record: if True, persist each proposal to the merge_proposals table
-                    so they survive across sessions.
-
-        Returns the list of proposed merges. Each MergeProposal has a
-        `confidence` field and an `is_safe_to_auto_apply` property —
-        callers decide what to do with each.
-        """
-        entities = self._store.query_entities(type_=type_, kind=kind)
+        """Run heuristic dedup over a user's entity set."""
+        entities = self._store.query_entities(user_id=user_id, type_=type_, kind=kind)
         proposals = _propose_merges(entities)
         if record:
             from lifegraph_kg.kg.store.sqlite import SqliteStore
 
             if isinstance(self._store, SqliteStore):
                 for p in proposals:
-                    win_id = self._store.find_entity_id(p.winner.type, p.winner.key)
-                    los_id = self._store.find_entity_id(p.loser.type, p.loser.key)
+                    win_id = self._store.find_entity_id(
+                        p.winner.type, p.winner.key, user_id=user_id
+                    )
+                    los_id = self._store.find_entity_id(
+                        p.loser.type, p.loser.key, user_id=user_id
+                    )
                     if win_id and los_id:
                         self._store.record_proposal(
                             proposal_id=_new_id(),
@@ -219,38 +222,35 @@ class _HygieneOps:
                         )
         return proposals
 
-    def apply(self, proposal: MergeProposal) -> None:
-        """Apply a merge: redirect loser's edges + mentions to winner.
-
-        Idempotent: applying the same merge twice is a no-op (the second
-        call finds nothing to redirect). Audit-preserving: the loser
-        entity row stays in the DB with `canonical_id` pointing at the
-        winner — it's an alias, not a deletion.
-        """
+    def apply(self, proposal: MergeProposal, *, user_id: str) -> None:
+        """Apply a merge for ``user_id``: redirect loser's edges + mentions to winner."""
         from lifegraph_kg.kg.store.sqlite import SqliteStore
 
         if not isinstance(self._store, SqliteStore):
             raise NotImplementedError("apply() requires SqliteStore; other backends in L4.")
-        winner_id = self._store.find_entity_id(proposal.winner.type, proposal.winner.key)
-        loser_id = self._store.find_entity_id(proposal.loser.type, proposal.loser.key)
+        winner_id = self._store.find_entity_id(
+            proposal.winner.type, proposal.winner.key, user_id=user_id
+        )
+        loser_id = self._store.find_entity_id(
+            proposal.loser.type, proposal.loser.key, user_id=user_id
+        )
         if winner_id is None or loser_id is None:
             return  # one side was already merged away
         self._store.apply_merge(winner_id, loser_id)
 
     def auto_apply(
-        self, *, type_: str | None = None, kind: str | None = None
+        self,
+        *,
+        user_id: str,
+        type_: str | None = None,
+        kind: str | None = None,
     ) -> list[MergeProposal]:
-        """Run propose() and apply every proposal that is_safe_to_auto_apply.
-
-        Returns the list of proposals that were applied. The default
-        is_safe rule is `confidence == "high"` AND `reason ==
-        "exact_normalized"` — only the truly unambiguous cases.
-        """
-        proposals = self.propose(type_=type_, kind=kind)
+        """Run propose() + apply every safe proposal for this user."""
+        proposals = self.propose(user_id=user_id, type_=type_, kind=kind)
         applied: list[MergeProposal] = []
         for p in proposals:
             if p.is_safe_to_auto_apply:
-                self.apply(p)
+                self.apply(p, user_id=user_id)
                 applied.append(p)
         return applied
 
@@ -267,48 +267,55 @@ class _TaskView:
     def __init__(self, store: Store) -> None:
         self._store = store
 
-    def pending(self) -> list[Episode]:
+    def pending(self, *, user_id: str) -> list[Episode]:
         """Tasks that are still active (not done, not dropped)."""
-        return self._store.query_tasks(status="active")
+        return self._store.query_tasks(user_id=user_id, status="active")
 
-    def overdue(self, *, as_of: datetime | None = None) -> list[Episode]:
+    def overdue(
+        self, *, user_id: str, as_of: datetime | None = None
+    ) -> list[Episode]:
         """Active tasks past their deadline."""
         cutoff = as_of if as_of is not None else datetime.now(UTC)
-        return self._store.query_tasks(status="active", deadline_before=cutoff)
+        return self._store.query_tasks(
+            user_id=user_id, status="active", deadline_before=cutoff
+        )
 
     def due_soon(
         self,
         within: timedelta,
         *,
+        user_id: str,
         as_of: datetime | None = None,
     ) -> list[Episode]:
-        """Active tasks whose deadline falls within the window
-        ``[as_of, as_of + within]``."""
+        """Active tasks whose deadline falls within ``[as_of, as_of + within]``."""
         now = as_of if as_of is not None else datetime.now(UTC)
         return self._store.query_tasks(
+            user_id=user_id,
             status="active",
             deadline_after=now,
             deadline_before=now + within,
         )
 
-    def completed_in(self, start: datetime, end: datetime) -> list[Episode]:
-        """Tasks completed in [start, end]. Implemented as a simple
-        in-Python filter on episodes_between since the lifecycle window
-        is on completed_at, not occurred_at."""
-        # No first-class store method for this — query all done tasks
-        # and filter. Personal-scale is fine; v0.2 can index completed_at.
-        all_done = self._store.query_tasks(status="done")
+    def completed_in(
+        self, start: datetime, end: datetime, *, user_id: str
+    ) -> list[Episode]:
+        """Tasks completed in [start, end]."""
+        all_done = self._store.query_tasks(user_id=user_id, status="done")
         return [
             t for t in all_done if t.completed_at is not None and start <= t.completed_at <= end
         ]
 
-    def by_context(self, context: str) -> list[Episode]:
+    def by_context(self, context: str, *, user_id: str) -> list[Episode]:
         """Tasks matching a GTD context (e.g. ``@work``)."""
-        return self._store.query_tasks(status="active", gtd_context=context)
+        return self._store.query_tasks(
+            user_id=user_id, status="active", gtd_context=context
+        )
 
-    def by_priority(self, priority: str) -> list[Episode]:
+    def by_priority(self, priority: str, *, user_id: str) -> list[Episode]:
         """Tasks at a given priority level (high / medium / low)."""
-        return self._store.query_tasks(status="active", priority=priority)
+        return self._store.query_tasks(
+            user_id=user_id, status="active", priority=priority
+        )
 
 
 class _KgOps:
@@ -319,15 +326,14 @@ class _KgOps:
 
     def invalidate_edge(self, edge_id: str, t_invalid: datetime) -> None:
         """Mark an edge as no longer valid as of `t_invalid` — supersede,
-        not delete. The edge survives in the DB; only `t_invalid` is set.
-        Subsequent `edges_as_of(t)` queries with `t < t_invalid` will
-        still return it.
-        """
+        not delete. The edge_id encodes user_id transitively."""
         self._store.invalidate_edge(edge_id, t_invalid)
 
-    def edges_as_of(self, t: datetime, *, verb: str | None = None) -> list[Edge]:
-        """Edges that were valid at time `t`. Optionally filter by verb."""
-        return self._store.edges_as_of(t, verb=verb)
+    def edges_as_of(
+        self, t: datetime, *, user_id: str, verb: str | None = None
+    ) -> list[Edge]:
+        """Edges that were valid at time `t` for the given user."""
+        return self._store.edges_as_of(t, user_id=user_id, verb=verb)
 
     def edges_for_episode(self, episode_id: str) -> list[Edge]:
         return self._store.edges_for_episode(episode_id)
@@ -364,41 +370,39 @@ class LifeGraph:
         self,
         text: str,
         *,
+        user_id: str,
         occurred_at: datetime | None = None,
         source: str = "user",
     ) -> Episode:
-        """Extract entities + persist as an Episode.
+        """Extract entities + persist as an Episode scoped to ``user_id``.
 
-        Returns the persisted Episode. Edges are created automatically:
-        for each (predicate, entity) pair in the extraction, an edge is
-        written with `from_entity=NULL` (the user is the implicit
-        subject), `verb=predicate`, `to_entity=entity.id`,
-        `t_event=occurred_at`, `t_valid=occurred_at`, `t_invalid=NULL`.
-
-        The L2 default emits one edge per (predicate, entity) pair. This is
-        coarser than L3's role-aware extraction (which we'll add when
-        we have richer signals) but matches Graphiti's bi-temporal
-        edge model and is queryable.
+        Edges are created automatically: for each (predicate, entity) pair
+        in the extraction, an edge is written with from_entity=NULL,
+        verb=predicate, to_entity=entity.id, all bi-temporal anchors set
+        from ``occurred_at``.
         """
         result = extract(text, llm=self._llm)
-        return self.persist(text, result, occurred_at=occurred_at, source=source)
+        return self.persist(
+            text, result, user_id=user_id, occurred_at=occurred_at, source=source
+        )
 
     def persist(
         self,
         text: str,
         extraction: ExtractionResult,
         *,
+        user_id: str,
         occurred_at: datetime | None = None,
         source: str = "user",
     ) -> Episode:
-        """Persist a pre-extracted result as an Episode.
-
-        Useful for cases where extraction was done elsewhere (batch
-        import, mock for tests, custom extractor).
-        """
+        """Persist a pre-extracted result as an Episode scoped to ``user_id``."""
         now = datetime.now(UTC)
+        # Re-stamp entities with the request's user_id — the extractor
+        # may default to a placeholder; the trust boundary is the caller.
+        scoped_entities = [e.model_copy(update={"user_id": user_id}) for e in extraction.entities]
         ep = Episode(
             id=_new_id(),
+            user_id=user_id,
             text=text,
             occurred_at=occurred_at if occurred_at is not None else now,
             ingested_at=now,
@@ -410,20 +414,21 @@ class LifeGraph:
         )
 
         # Two-phase save: episode + entities first (so entity IDs are
-        # known via dedup); then resolve IDs and write edges. This
-        # keeps the dedup logic inside the store while letting the
-        # facade build edges that reference the deduplicated entities.
-        self._store.save_episode(ep, list(extraction.entities), edges=[])
+        # known via dedup); then resolve IDs and write edges.
+        self._store.save_episode(ep, scoped_entities, edges=[])
 
         edges: list[Edge] = []
         for predicate in extraction.predicates:
-            for entity in extraction.entities:
-                ent_id = self._store.find_entity_id(entity.type, entity.key)
+            for entity in scoped_entities:
+                ent_id = self._store.find_entity_id(
+                    entity.type, entity.key, user_id=user_id
+                )
                 if ent_id is None:
                     continue
                 edges.append(
                     Edge(
                         id=_new_id(),
+                        user_id=user_id,
                         from_entity=None,
                         to_entity=ent_id,
                         verb=predicate,
@@ -443,6 +448,7 @@ class LifeGraph:
         self,
         text: str,
         *,
+        user_id: str,
         deadline: datetime | None = None,
         priority: str | None = None,
         gtd_context: str | None = None,
@@ -451,18 +457,12 @@ class LifeGraph:
         occurred_at: datetime | None = None,
         source: str = "user",
     ) -> Episode:
-        """Create a task — an Episode with kind='task' + lifecycle fields.
-
-        The task's text gets the same v6 extraction (entities, predicates)
-        as a log; the difference is the kind discriminator + the structured
-        lifecycle metadata. Tasks linked to entities show up in the same
-        ``episodes.mentioning(entity)`` queries that logs do — querying
-        "everything about Project X" returns both.
-        """
+        """Create a task scoped to ``user_id``."""
         result = extract(text, llm=self._llm)
         return self._persist_task(
             text,
             result,
+            user_id=user_id,
             occurred_at=occurred_at,
             source=source,
             deadline=deadline,
@@ -477,6 +477,7 @@ class LifeGraph:
         text: str,
         extraction: ExtractionResult,
         *,
+        user_id: str,
         occurred_at: datetime | None = None,
         source: str = "user",
         deadline: datetime | None = None,
@@ -486,16 +487,12 @@ class LifeGraph:
         action_verb: str | None = None,
     ) -> Episode:
         """Internal — persist a task with the same two-phase save as
-        ``persist()`` but with task-flavored metadata + kind='task'.
-
-        Public callers use ``task()``; the migration script uses this
-        directly to skip re-extraction when the entities are already known."""
+        ``persist()`` but with task-flavored metadata + kind='task'."""
         now = datetime.now(UTC)
-        # For tasks, occurred_at defaults to now (creation time).
-        # Some callers (like the todo migration) pass the original
-        # legacy timestamp.
+        scoped_entities = [e.model_copy(update={"user_id": user_id}) for e in extraction.entities]
         ep = Episode(
             id=_new_id(),
+            user_id=user_id,
             text=text,
             occurred_at=occurred_at if occurred_at is not None else now,
             ingested_at=now,
@@ -512,17 +509,20 @@ class LifeGraph:
             gtd_context=gtd_context,
             action_verb=action_verb,
         )
-        self._store.save_episode(ep, list(extraction.entities), edges=[])
+        self._store.save_episode(ep, scoped_entities, edges=[])
 
         edges: list[Edge] = []
         for predicate in extraction.predicates:
-            for entity in extraction.entities:
-                ent_id = self._store.find_entity_id(entity.type, entity.key)
+            for entity in scoped_entities:
+                ent_id = self._store.find_entity_id(
+                    entity.type, entity.key, user_id=user_id
+                )
                 if ent_id is None:
                     continue
                 edges.append(
                     Edge(
                         id=_new_id(),
+                        user_id=user_id,
                         from_entity=None,
                         to_entity=ent_id,
                         verb=predicate,
@@ -555,17 +555,20 @@ class LifeGraph:
         self,
         type_: type[Entity],
         *,
+        user_id: str,
         kind: str | None = None,
         key: str | None = None,
     ) -> _EntityQuery:
-        """Query entities of a given type with optional filters.
+        """Query entities of a given type for a specific user.
 
         Example:
-            lg.query(Person, key="sara").one()
-            lg.query(Topic, kind="food").all()
+            lg.query(Person, user_id=u, key="sara").one()
+            lg.query(Topic, user_id=u, kind="food").all()
         """
         type_name = str(type_.model_fields["type"].default)
-        results = self._store.query_entities(type_=type_name, kind=kind, key=key)
+        results = self._store.query_entities(
+            user_id=user_id, type_=type_name, kind=kind, key=key
+        )
         return _EntityQuery(self._store, results)
 
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for task support — Episode.kind="task" + lifecycle + lg.tasks view.
 
+
 Five groups:
   - schema: kind/status/priority/deadline columns persist + round-trip
   - lifecycle: complete_task / drop_task / reopen_task transitions
@@ -17,6 +18,8 @@ from datetime import UTC, datetime, timedelta
 
 from lifegraph_kg import LifeGraph, Person, Topic
 from lifegraph_kg.kg.episode import Episode
+
+TEST_USER = "test-user"
 
 T_NOW = datetime(2026, 5, 10, 12, 0, tzinfo=UTC)
 T_TOMORROW = T_NOW + timedelta(days=1)
@@ -40,7 +43,7 @@ def _task_episode(
     keeps tests free of LLM dependency. The migration script uses this
     same path for legacy todos."""
     return Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text=text,
         occurred_at=T_NOW,
         ingested_at=T_NOW,
@@ -81,7 +84,7 @@ def test_existing_episodes_default_to_log_kind() -> None:
     compat for L0-L2 callers."""
     lg = LifeGraph()
     ep = Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text="Had ramen",
         occurred_at=T_NOW,
         ingested_at=T_NOW,
@@ -152,7 +155,7 @@ def test_pending_returns_only_active_tasks() -> None:
     lg._store.save_episode(ep_active, [], [])
     lg._store.save_episode(ep_done, [], [])
 
-    pending = lg.tasks.pending()
+    pending = lg.tasks.pending(user_id=TEST_USER)
     assert len(pending) == 1
     assert pending[0].text == "active thing"
 
@@ -164,7 +167,7 @@ def test_overdue_filters_by_deadline() -> None:
     lg._store.save_episode(overdue, [], [])
     lg._store.save_episode(future, [], [])
 
-    od = lg.tasks.overdue(as_of=T_NOW)
+    od = lg.tasks.overdue(as_of=T_NOW, user_id=TEST_USER)
     assert {t.text for t in od} == {"overdue"}
 
 
@@ -176,7 +179,7 @@ def test_due_soon_window() -> None:
     for ep in (very_soon, next_week, last_week):
         lg._store.save_episode(ep, [], [])
 
-    soon = lg.tasks.due_soon(timedelta(days=3), as_of=T_NOW)
+    soon = lg.tasks.due_soon(timedelta(days=3), as_of=T_NOW, user_id=TEST_USER)
     assert {t.text for t in soon} == {"tomorrow"}
 
 
@@ -188,7 +191,7 @@ def test_by_context_filters_active_only() -> None:
     for ep in (a_work, b_home, c_done_work):
         lg._store.save_episode(ep, [], [])
 
-    work = lg.tasks.by_context("@work")
+    work = lg.tasks.by_context("@work", user_id=TEST_USER)
     assert {t.text for t in work} == {"work thing"}  # done excluded
 
 
@@ -200,7 +203,7 @@ def test_by_priority_filters_active_only() -> None:
     for ep in (high, medium, low_done):
         lg._store.save_episode(ep, [], [])
 
-    h = lg.tasks.by_priority("high")
+    h = lg.tasks.by_priority("high", user_id=TEST_USER)
     assert {t.text for t in h} == {"high"}
 
 
@@ -213,7 +216,7 @@ def test_completed_in_window() -> None:
     lg.complete_task(ep_a.id, at=T_NOW)
     lg.complete_task(ep_b.id, at=T_LAST_WEEK)
 
-    recent = lg.tasks.completed_in(T_NOW - timedelta(days=2), T_NOW + timedelta(days=2))
+    recent = lg.tasks.completed_in(T_NOW - timedelta(days=2), T_NOW + timedelta(days=2), user_id=TEST_USER)
     assert {t.text for t in recent} == {"a"}
 
 
@@ -224,17 +227,17 @@ def test_entity_query_finds_tasks_alongside_logs() -> None:
     """Tasks and logs share the entity-mention table — querying for a
     Person who appears in both returns both."""
     lg = LifeGraph()
-    sara = Person(value="Sara", key="sara")
+    sara = Person(user_id=TEST_USER, value="Sara", key="sara")
 
     log_ep = Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text="Met Sara today",
         occurred_at=T_NOW,
         ingested_at=T_NOW,
         kind="log",
     )
     task_ep = Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text="Email Sara about the meeting",
         occurred_at=T_NOW,
         ingested_at=T_NOW,
@@ -253,18 +256,18 @@ def test_entity_query_finds_tasks_alongside_logs() -> None:
 def test_topic_food_episodes_pivot_excludes_unrelated_tasks() -> None:
     """The food-pivot still works correctly with tasks in the mix."""
     lg = LifeGraph()
-    ramen = Topic(value="ramen", key="ramen", kind="food")
-    laundry = Topic(value="laundry", key="laundry", kind="general")
+    ramen = Topic(user_id=TEST_USER, value="ramen", key="ramen", kind="food")
+    laundry = Topic(user_id=TEST_USER, value="laundry", key="laundry", kind="general")
 
     log_ep = Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text="Had ramen",
         occurred_at=T_NOW,
         ingested_at=T_NOW,
         kind="log",
     )
     task_ep = Episode(
-        id=_new_id(),
+        user_id=TEST_USER, id=_new_id(),
         text="Do laundry",
         occurred_at=T_NOW,
         ingested_at=T_NOW,
@@ -273,7 +276,7 @@ def test_topic_food_episodes_pivot_excludes_unrelated_tasks() -> None:
     lg._store.save_episode(log_ep, [ramen], [])
     lg._store.save_episode(task_ep, [laundry], [])
 
-    food_eps = lg.query(Topic, kind="food").episodes()
+    food_eps = lg.query(Topic, kind="food", user_id=TEST_USER).episodes()
     assert len(food_eps) == 1
     assert food_eps[0].text == "Had ramen"
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the extraction pipeline.
 
+
 Tests use a fake LLM client so they run in CI without API keys. Live
 API calls happen only via the eval runners under `tests/eval/runners/`,
 which are gated on `library_extractor_ready()` AND `ANTHROPIC_API_KEY`.
@@ -20,6 +21,8 @@ from lifegraph_kg.extract.grounding import (
     normalize_for_substring,
     violates_substring,
 )
+
+TEST_USER = "test-user"
 
 
 class FakeClient:
@@ -82,9 +85,9 @@ def test_violates_substring_verbatim_passes() -> None:
 def test_filter_drops_violators() -> None:
     src = "Had ramen with Sara at Ippudo"
     entities = [
-        Person(value="Sara", key="sara"),
-        Topic(value="ramen", key="ramen", kind="food"),
-        Topic(value="not-in-source", key="not-in-source", kind="general"),
+        Person(user_id=TEST_USER, value="Sara", key="sara"),
+        Topic(user_id=TEST_USER, value="ramen", key="ramen", kind="food"),
+        Topic(user_id=TEST_USER, value="not-in-source", key="not-in-source", kind="general"),
     ]
     kept, violations = filter_substring_violations(entities, src)
     assert len(kept) == 2
@@ -224,18 +227,18 @@ def test_extract_calls_extractor_then_critic() -> None:
 
 
 def test_lifegraph_log_returns_episode() -> None:
-    """LifeGraph.log() returns the persisted Episode in L2."""
+    """LifeGraph.log(user_id=TEST_USER) returns the persisted Episode in L2."""
     from lifegraph_kg.kg.episode import Episode
 
     fake = FakeClient(extraction_response=_VALID_EXTRACTION)
     lg = LifeGraph(llm=fake)
-    ep = lg.log("Had ramen with Sara at Ippudo")
+    ep = lg.log("Had ramen with Sara at Ippudo", user_id=TEST_USER)
     assert isinstance(ep, Episode)
     assert ep.predicates == ["ate"]
-    # Entities are persisted, queryable via lg.query()
-    assert len(lg.query(Person).all()) == 1
-    assert len(lg.query(Place).all()) == 1
-    assert len(lg.query(Topic, kind="food").all()) == 1
+    # Entities are persisted, queryable via lg.query(user_id=TEST_USER)
+    assert len(lg.query(Person, user_id=TEST_USER).all()) == 1
+    assert len(lg.query(Place, user_id=TEST_USER).all()) == 1
+    assert len(lg.query(Topic, kind="food", user_id=TEST_USER).all()) == 1
 
 
 def test_lifegraph_log_handles_chinese() -> None:
@@ -254,11 +257,11 @@ def test_lifegraph_log_handles_chinese() -> None:
     )
     fake = FakeClient(extraction_response=extraction)
     lg = LifeGraph(llm=fake)
-    ep = lg.log("晚上修复了 TimeWises 的几个 UI bug")
+    ep = lg.log("晚上修复了 TimeWises 的几个 UI bug", user_id=TEST_USER)
     assert ep.predicates == ["fixed"]
-    timewises = lg.query(Project, key="timewises").one()
+    timewises = lg.query(Project, key="timewises", user_id=TEST_USER).one()
     assert timewises.value == "TimeWises"
-    bugs = lg.query(Topic, key="ui-bug").one()
+    bugs = lg.query(Topic, key="ui-bug", user_id=TEST_USER).one()
     assert bugs.value == "UI bug"
 
 
@@ -270,7 +273,7 @@ def test_topic_kind_required_validation() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        Topic(value="x", key="x", kind="not-a-valid-kind")  # type: ignore[arg-type]
+        Topic(user_id=TEST_USER, value="x", key="x", kind="not-a-valid-kind")  # type: ignore[arg-type]
 
 
 def test_entities_are_frozen() -> None:
@@ -278,6 +281,6 @@ def test_entities_are_frozen() -> None:
     raises ValidationError at runtime."""
     from pydantic import ValidationError
 
-    sara = Person(value="Sara", key="sara")
+    sara = Person(user_id=TEST_USER, value="Sara", key="sara")
     with pytest.raises(ValidationError):
         sara.value = "Other"

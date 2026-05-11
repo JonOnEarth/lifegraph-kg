@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the L3 hygiene engine.
 
+
 Three groups:
   - normalize: canonical_form on EN, CN, mixed; punctuation; whitespace
   - dedup:     propose_merges across compatibility / heuristics
@@ -17,6 +18,8 @@ from lifegraph_kg.hygiene import canonical_form, propose_merges
 from lifegraph_kg.hygiene.dedup import _damerau_levenshtein
 from lifegraph_kg.hygiene.proposals import MergeProposal
 from tests.test_extraction import FakeClient
+
+TEST_USER = "test-user"
 
 T1 = datetime(2026, 5, 1, 19, 0, tzinfo=UTC)
 T2 = datetime(2026, 5, 5, 17, 0, tzinfo=UTC)
@@ -75,7 +78,7 @@ def test_damerau_levenshtein_empty() -> None:
 def test_propose_exact_normalized_match() -> None:
     """`Sara` and `sara` collapse to the same canonical form."""
     proposals = propose_merges(
-        [Person(value="Sara", key="sara1"), Person(value="sara", key="sara2")]
+        [Person(user_id=TEST_USER, value="Sara", key="sara1"), Person(user_id=TEST_USER, value="sara", key="sara2")]
     )
     assert len(proposals) == 1
     p = proposals[0]
@@ -87,7 +90,7 @@ def test_propose_exact_normalized_match() -> None:
 def test_propose_substring_qualifier() -> None:
     """`Ippudo NYC` is a qualified form of `Ippudo` — propose merge."""
     proposals = propose_merges(
-        [Place(value="Ippudo", key="ippudo"), Place(value="Ippudo NYC", key="ippudo-nyc")]
+        [Place(user_id=TEST_USER, value="Ippudo", key="ippudo"), Place(user_id=TEST_USER, value="Ippudo NYC", key="ippudo-nyc")]
     )
     assert len(proposals) == 1
     p = proposals[0]
@@ -102,14 +105,14 @@ def test_propose_substring_qualifier() -> None:
 def test_propose_edit_distance_short_strings_skipped() -> None:
     """Edit distance is suppressed for short strings — `Tao` / `Tom`
     must NOT be proposed as a merge despite Levenshtein = 1."""
-    proposals = propose_merges([Person(value="Tao", key="tao"), Person(value="Tom", key="tom")])
+    proposals = propose_merges([Person(user_id=TEST_USER, value="Tao", key="tao"), Person(user_id=TEST_USER, value="Tom", key="tom")])
     assert proposals == []
 
 
 def test_propose_edit_distance_long_strings() -> None:
     """For non-trivial-length strings, distance ≤ 1 produces a proposal."""
     proposals = propose_merges(
-        [Place(value="Ippudo", key="ippudo"), Place(value="Ippud0", key="ippud0")]
+        [Place(user_id=TEST_USER, value="Ippudo", key="ippudo"), Place(user_id=TEST_USER, value="Ippud0", key="ippud0")]
     )
     assert len(proposals) == 1
     assert proposals[0].reason == "edit_distance"
@@ -118,7 +121,7 @@ def test_propose_edit_distance_long_strings() -> None:
 def test_propose_does_not_cross_types() -> None:
     """A Person never merges with a Place even if values match."""
     proposals = propose_merges(
-        [Person(value="Mercury", key="mercury"), Place(value="Mercury", key="mercury")]
+        [Person(user_id=TEST_USER, value="Mercury", key="mercury"), Place(user_id=TEST_USER, value="Mercury", key="mercury")]
     )
     assert proposals == []
 
@@ -127,8 +130,8 @@ def test_propose_does_not_cross_topic_kinds() -> None:
     """A Topic{food} never merges with a Topic{media} even with same value."""
     proposals = propose_merges(
         [
-            Topic(value="apple", key="apple", kind="food"),
-            Topic(value="apple", key="apple", kind="media"),  # the company
+            Topic(user_id=TEST_USER, value="apple", key="apple", kind="food"),
+            Topic(user_id=TEST_USER, value="apple", key="apple", kind="media"),  # the company
         ]
     )
     assert proposals == []
@@ -138,8 +141,8 @@ def test_propose_does_not_cross_distinct_people_with_similar_names() -> None:
     """Adversarial case: `Alex Smith` and `Alex Johnson` must NOT merge."""
     proposals = propose_merges(
         [
-            Person(value="Alex Smith", key="alex-smith"),
-            Person(value="Alex Johnson", key="alex-johnson"),
+            Person(user_id=TEST_USER, value="Alex Smith", key="alex-smith"),
+            Person(user_id=TEST_USER, value="Alex Johnson", key="alex-johnson"),
         ]
     )
     assert proposals == []
@@ -166,15 +169,15 @@ def test_lifegraph_hygiene_propose_returns_proposals() -> None:
     different keys, propose detects the merge."""
     fake = FakeClient(extraction_response=_SARA_EXTRACTION_1)
     lg = LifeGraph(llm=fake)
-    lg.log("Met Sara today", occurred_at=T1)
+    lg.log("Met Sara today", occurred_at=T1, user_id=TEST_USER)
 
     fake.extraction_response = _SARA_EXTRACTION_2
-    lg.log("Called sara again", occurred_at=T2)
+    lg.log("Called sara again", occurred_at=T2, user_id=TEST_USER)
 
     # Two Person entities exist (different keys).
-    assert len(lg.query(Person).all()) == 2
+    assert len(lg.query(Person, user_id=TEST_USER).all()) == 2
 
-    proposals = lg.hygiene.propose(type_="Person")
+    proposals = lg.hygiene.propose(type_="Person", user_id=TEST_USER)
     assert len(proposals) == 1
     assert proposals[0].confidence == "high"
 
@@ -184,16 +187,16 @@ def test_lifegraph_hygiene_apply_redirects_edges() -> None:
     point at the winner; loser entity row stays (audit trail)."""
     fake = FakeClient(extraction_response=_SARA_EXTRACTION_1)
     lg = LifeGraph(llm=fake)
-    ep1 = lg.log("Met Sara today", occurred_at=T1)
+    ep1 = lg.log("Met Sara today", occurred_at=T1, user_id=TEST_USER)
 
     fake.extraction_response = _SARA_EXTRACTION_2
-    ep2 = lg.log("Called sara again", occurred_at=T2)
+    ep2 = lg.log("Called sara again", occurred_at=T2, user_id=TEST_USER)
 
-    proposals = lg.hygiene.propose(type_="Person")
-    lg.hygiene.apply(proposals[0])
+    proposals = lg.hygiene.propose(type_="Person", user_id=TEST_USER)
+    lg.hygiene.apply(proposals[0], user_id=TEST_USER)
 
     # Entity rows count is unchanged (audit trail preserved).
-    assert len(lg.query(Person).all()) == 2
+    assert len(lg.query(Person, user_id=TEST_USER).all()) == 2
     # But the canonical view: only one Person has canonical_id IS NULL
     # (verified via the underlying store).
     from lifegraph_kg.kg.store.sqlite import SqliteStore
@@ -216,10 +219,10 @@ def test_lifegraph_hygiene_auto_apply_only_high_confidence() -> None:
     """auto_apply only fires for `is_safe_to_auto_apply` proposals."""
     fake = FakeClient(extraction_response=_SARA_EXTRACTION_1)
     lg = LifeGraph(llm=fake)
-    lg.log("Met Sara today", occurred_at=T1)
+    lg.log("Met Sara today", occurred_at=T1, user_id=TEST_USER)
 
     fake.extraction_response = _SARA_EXTRACTION_2
-    lg.log("Called sara again", occurred_at=T2)
+    lg.log("Called sara again", occurred_at=T2, user_id=TEST_USER)
 
     # Add a substring-qualifier case (medium confidence — should NOT auto-apply)
     place_extraction = """{
@@ -228,16 +231,16 @@ def test_lifegraph_hygiene_auto_apply_only_high_confidence() -> None:
         {"type": "Place", "value": "Ippudo", "key": "ippudo"}
       ]}"""
     fake.extraction_response = place_extraction
-    lg.log("Went to Ippudo", occurred_at=T1)
+    lg.log("Went to Ippudo", occurred_at=T1, user_id=TEST_USER)
     place_extraction_2 = """{
       "predicates": ["went"], "body_state": null, "sentiment": null, "energy": null,
       "entities": [
         {"type": "Place", "value": "Ippudo NYC", "key": "ippudo-nyc"}
       ]}"""
     fake.extraction_response = place_extraction_2
-    lg.log("Went to Ippudo NYC", occurred_at=T2)
+    lg.log("Went to Ippudo NYC", occurred_at=T2, user_id=TEST_USER)
 
-    applied = lg.hygiene.auto_apply()
+    applied = lg.hygiene.auto_apply(user_id=TEST_USER)
     # Only the Person merge (high confidence + exact_normalized) should apply.
     assert len(applied) == 1
     assert applied[0].reason == "exact_normalized"
@@ -247,11 +250,11 @@ def test_proposal_record_persists() -> None:
     """propose(record=True) writes proposals to the merge_proposals table."""
     fake = FakeClient(extraction_response=_SARA_EXTRACTION_1)
     lg = LifeGraph(llm=fake)
-    lg.log("Met Sara today", occurred_at=T1)
+    lg.log("Met Sara today", occurred_at=T1, user_id=TEST_USER)
     fake.extraction_response = _SARA_EXTRACTION_2
-    lg.log("Called sara again", occurred_at=T2)
+    lg.log("Called sara again", occurred_at=T2, user_id=TEST_USER)
 
-    proposals = lg.hygiene.propose(type_="Person", record=True)
+    proposals = lg.hygiene.propose(type_="Person", record=True, user_id=TEST_USER)
     assert len(proposals) == 1
 
     from lifegraph_kg.kg.store.sqlite import SqliteStore
@@ -265,8 +268,8 @@ def test_proposal_record_persists() -> None:
 
 def test_merge_proposal_str_repr() -> None:
     """MergeProposal has a readable string repr for review UIs."""
-    sara = Person(value="Sara", key="sara1")
-    sara2 = Person(value="sara", key="sara2")
+    sara = Person(user_id=TEST_USER, value="Sara", key="sara1")
+    sara2 = Person(user_id=TEST_USER, value="sara", key="sara2")
     p = MergeProposal(
         winner=sara,
         loser=sara2,

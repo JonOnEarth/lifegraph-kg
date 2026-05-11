@@ -47,10 +47,22 @@ class Entity(BaseModel):
     The `key` is a lowercase, hyphenated canonical form derived from
     `value`. The `value` is the verbatim surface form from the source
     text (substring-assertion enforced).
+
+    ``user_id`` scopes the entity to a specific user — the dedup
+    boundary is ``(user_id, type, key)``. Two users with a friend
+    named "Sara" get distinct Person rows. Required (no default) so
+    callers can't accidentally leak entities across tenants.
     """
 
     model_config = ConfigDict(frozen=True)
 
+    # Tenancy: scopes the entity to a user. The dedup boundary is
+    # ``(user_id, type, key)``. Default is empty so the extract pipeline
+    # (which doesn't know the request's auth context) can construct
+    # entities; ``LifeGraph.persist()`` always re-stamps with the
+    # request user_id before write. Production reads see the real
+    # user_id from the DB row.
+    user_id: str = ""
     type: str
     key: str
     value: str

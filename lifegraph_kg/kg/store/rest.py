@@ -65,9 +65,13 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+_LEGACY_USER = ""
+
+
 def _entity_from_row(row: dict[str, Any]) -> EntityT:
     type_ = row["type"]
     common = {
+        "user_id": row.get("user_id") or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
         "attributes": (
@@ -96,6 +100,7 @@ def _episode_from_row(row: dict[str, Any]) -> Episode:
     preds = json.loads(preds_raw) if isinstance(preds_raw, str) else preds_raw
     return Episode(
         id=row["id"],
+        user_id=row.get("user_id") or _LEGACY_USER,
         text=row["text"],
         occurred_at=occurred_at,
         ingested_at=ingested_at,
@@ -124,6 +129,7 @@ def _edge_from_row(row: dict[str, Any]) -> Edge:
     assert t_valid is not None
     return Edge(
         id=row["id"],
+        user_id=row.get("user_id") or _LEGACY_USER,
         from_entity=row["from_entity"],
         to_entity=row["to_entity"],
         verb=row["verb"],
@@ -216,9 +222,11 @@ class RestStore:
         entities: list[Any],
         edges: list[Edge],
     ) -> None:
+        uid = episode.user_id
         # 1. Episode.
         ep_row = {
             "id": episode.id,
+            "user_id": uid,
             "text": episode.text,
             "occurred_at": _to_ms(episode.occurred_at),
             "ingested_at": _to_ms(episode.ingested_at),
@@ -245,6 +253,7 @@ class RestStore:
             ent_rows.append(
                 {
                     "id": _new_id(),
+                    "user_id": uid,
                     "type": e.type,
                     "kind": getattr(e, "kind", None),
                     "key": e.key,
@@ -254,14 +263,20 @@ class RestStore:
                 }
             )
         if ent_rows:
-            self._post("/entities", ent_rows, on_conflict="type,key", return_repr=False)
+            self._post("/entities", ent_rows, on_conflict="user_id,type,key", return_repr=False)
 
         # 3. Resolve entity IDs (the row may already have existed under
         # a different generated ID).
         for e in entities:
             resolved = self._get(
                 "/entities",
-                **{"type": f"eq.{e.type}", "key": f"eq.{e.key}", "select": "id", "limit": "1"},
+                **{
+                    "user_id": f"eq.{uid}",
+                    "type": f"eq.{e.type}",
+                    "key": f"eq.{e.key}",
+                    "select": "id",
+                    "limit": "1",
+                },
             )
             if not resolved:
                 continue
@@ -269,7 +284,7 @@ class RestStore:
             # 4. Mention link.
             self._post(
                 "/entity_episode_mention",
-                [{"entity_id": entity_id, "episode_id": episode.id}],
+                [{"entity_id": entity_id, "episode_id": episode.id, "user_id": uid}],
                 on_conflict="entity_id,episode_id",
                 return_repr=False,
             )
@@ -279,6 +294,7 @@ class RestStore:
             edge_rows = [
                 {
                     "id": e.id,
+                    "user_id": e.user_id,
                     "from_entity": e.from_entity,
                     "to_entity": e.to_entity,
                     "verb": e.verb,
@@ -299,6 +315,7 @@ class RestStore:
         edge_rows = [
             {
                 "id": e.id,
+                "user_id": e.user_id,
                 "from_entity": e.from_entity,
                 "to_entity": e.to_entity,
                 "verb": e.verb,
@@ -319,8 +336,11 @@ class RestStore:
         rows = self._get("/episodes", **{"id": f"eq.{episode_id}", "limit": "1"})
         return _episode_from_row(rows[0]) if rows else None
 
-    def episodes_since(self, t: datetime, limit: int | None = None) -> list[Episode]:
+    def episodes_since(
+        self, t: datetime, *, user_id: str, limit: int | None = None
+    ) -> list[Episode]:
         q: dict[str, Any] = {
+            "user_id": f"eq.{user_id}",
             "occurred_at": f"gte.{_to_ms(t)}",
             "order": "occurred_at.desc",
         }
@@ -329,9 +349,15 @@ class RestStore:
         return [_episode_from_row(r) for r in self._get("/episodes", **q)]
 
     def episodes_between(
-        self, start: datetime, end: datetime, limit: int | None = None
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        user_id: str,
+        limit: int | None = None,
     ) -> list[Episode]:
         q: dict[str, Any] = {
+            "user_id": f"eq.{user_id}",
             "and": f"(occurred_at.gte.{_to_ms(start)},occurred_at.lte.{_to_ms(end)})",
             "order": "occurred_at.desc",
         }
@@ -339,7 +365,9 @@ class RestStore:
             q["limit"] = str(limit)
         return [_episode_from_row(r) for r in self._get("/episodes", **q)]
 
-    def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]:
+    def episodes_mentioning(
+        self, entity_id: str, *, limit: int | None = None
+    ) -> list[Episode]:
         # Two-step: fetch mention rows, then batch-fetch episodes by id.
         q1: dict[str, Any] = {"entity_id": f"eq.{entity_id}", "select": "episode_id"}
         rows = self._get("/entity_episode_mention", **q1)
@@ -347,7 +375,7 @@ class RestStore:
         return self._episodes_by_ids(ep_ids, limit=limit) if ep_ids else []
 
     def episodes_mentioning_any(
-        self, entity_ids: list[str], limit: int | None = None
+        self, entity_ids: list[str], *, limit: int | None = None
     ) -> list[Episode]:
         if not entity_ids:
             return []
@@ -377,26 +405,40 @@ class RestStore:
 
     # --- entity reads ---
 
-    def find_entity(self, type_: str, key: str) -> EntityT | None:
+    def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         rows = self._get(
-            "/entities", **{"type": f"eq.{type_}", "key": f"eq.{key}", "limit": "1"}
+            "/entities",
+            **{
+                "user_id": f"eq.{user_id}",
+                "type": f"eq.{type_}",
+                "key": f"eq.{key}",
+                "limit": "1",
+            },
         )
         return _entity_from_row(rows[0]) if rows else None
 
-    def find_entity_id(self, type_: str, key: str) -> str | None:
+    def find_entity_id(self, type_: str, key: str, *, user_id: str) -> str | None:
         rows = self._get(
             "/entities",
-            **{"type": f"eq.{type_}", "key": f"eq.{key}", "select": "id", "limit": "1"},
+            **{
+                "user_id": f"eq.{user_id}",
+                "type": f"eq.{type_}",
+                "key": f"eq.{key}",
+                "select": "id",
+                "limit": "1",
+            },
         )
         return rows[0]["id"] if rows else None
 
     def query_entities(
         self,
+        *,
+        user_id: str,
         type_: str | None = None,
         kind: str | None = None,
         key: str | None = None,
     ) -> list[EntityT]:
-        q: dict[str, Any] = {}
+        q: dict[str, Any] = {"user_id": f"eq.{user_id}"}
         if type_ is not None:
             q["type"] = f"eq.{type_}"
         if kind is not None:
@@ -416,9 +458,12 @@ class RestStore:
             **{"id": f"eq.{edge_id}", "t_invalid": "is.null"},
         )
 
-    def edges_as_of(self, t: datetime, *, verb: str | None = None) -> list[Edge]:
+    def edges_as_of(
+        self, t: datetime, *, user_id: str, verb: str | None = None
+    ) -> list[Edge]:
         ms = _to_ms(t)
         q: dict[str, Any] = {
+            "user_id": f"eq.{user_id}",
             "t_valid": f"lte.{ms}",
             "or": f"(t_invalid.is.null,t_invalid.gt.{ms})",
         }
@@ -515,13 +560,14 @@ class RestStore:
     def query_tasks(
         self,
         *,
+        user_id: str,
         status: str | None = None,
         priority: str | None = None,
         gtd_context: str | None = None,
         deadline_before: datetime | None = None,
         deadline_after: datetime | None = None,
     ) -> list[Episode]:
-        q: dict[str, Any] = {"kind": "eq.task"}
+        q: dict[str, Any] = {"user_id": f"eq.{user_id}", "kind": "eq.task"}
         if status is not None:
             q["status"] = f"eq.{status}"
         if priority is not None:

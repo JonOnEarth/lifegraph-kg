@@ -28,7 +28,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 # The latest schema version. Bump in lockstep with adding a new
 # `00NN_name.sql` migration file. The runner applies only migrations
 # with version > current_version, so old DBs migrate forward.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _to_ms(dt: datetime) -> int:
@@ -50,10 +50,18 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+# Phase-6 single-user fallback: legacy rows from an unscoped DB have
+# NULL user_id. We keep them readable for forensic value but loading
+# them via _from_row uses this sentinel; new writes must specify a
+# real user_id.
+_LEGACY_USER = ""
+
+
 def _entity_from_row(row: sqlite3.Row) -> EntityT:
     """Reconstruct a typed entity from a DB row."""
     type_ = row["type"]
     common = {
+        "user_id": row["user_id"] or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
         "attributes": json.loads(row["attributes_json"] or "{}"),
@@ -80,6 +88,7 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
 
     return Episode(
         id=row["id"],
+        user_id=_get("user_id") or _LEGACY_USER,  # type: ignore[arg-type]
         text=row["text"],
         occurred_at=_from_ms(row["occurred_at"]),  # type: ignore[arg-type]
         ingested_at=_from_ms(row["ingested_at"]),  # type: ignore[arg-type]
@@ -100,8 +109,10 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
 
 
 def _edge_from_row(row: sqlite3.Row) -> Edge:
+    keys = row.keys() if hasattr(row, "keys") else []
     return Edge(
         id=row["id"],
+        user_id=(row["user_id"] if "user_id" in keys else None) or _LEGACY_USER,
         from_entity=row["from_entity"],
         to_entity=row["to_entity"],
         verb=row["verb"],
@@ -179,17 +190,23 @@ class SqliteStore:
         entities: list[Entity],
         edges: list[Edge],
     ) -> None:
-        """Atomic write: episode row + dedup entities + edges + mention links."""
+        """Atomic write: episode row + dedup entities + edges + mention links.
+        Every entity inherits ``episode.user_id`` for dedup boundary
+        purposes — caller-supplied ``entity.user_id`` is ignored if it
+        disagrees, matching the invariant on the wire (the request was
+        authenticated as a single user)."""
+        uid = episode.user_id
         with self._conn:  # transaction
             self._conn.execute(
-                """INSERT INTO episodes (id, text, occurred_at, ingested_at, source,
+                """INSERT INTO episodes (id, user_id, text, occurred_at, ingested_at, source,
                                           predicates, body_state, sentiment, energy,
                                           kind, status, priority, deadline,
                                           completed_at, recurrence, gtd_context,
                                           action_verb)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     episode.id,
+                    uid,
                     episode.text,
                     _to_ms(episode.occurred_at),
                     _to_ms(episode.ingested_at),
@@ -211,11 +228,12 @@ class SqliteStore:
             for entity in entities:
                 self._conn.execute(
                     """INSERT INTO entities
-                         (id, type, kind, key, value, attributes_json, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT(type, key) DO NOTHING""",
+                         (id, user_id, type, kind, key, value, attributes_json, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(user_id, type, key) DO NOTHING""",
                     (
                         _new_id(),
+                        uid,
                         entity.type,
                         getattr(entity, "kind", None),
                         entity.key,
@@ -226,14 +244,14 @@ class SqliteStore:
                 )
                 # Record mention link — fetch the (possibly pre-existing) entity ID.
                 row = self._conn.execute(
-                    "SELECT id FROM entities WHERE type=? AND key=?",
-                    (entity.type, entity.key),
+                    "SELECT id FROM entities WHERE user_id=? AND type=? AND key=?",
+                    (uid, entity.type, entity.key),
                 ).fetchone()
                 if row is not None:
                     self._conn.execute(
-                        """INSERT INTO entity_episode_mention (entity_id, episode_id)
-                           VALUES (?, ?) ON CONFLICT DO NOTHING""",
-                        (row["id"], episode.id),
+                        """INSERT INTO entity_episode_mention (entity_id, episode_id, user_id)
+                           VALUES (?, ?, ?) ON CONFLICT DO NOTHING""",
+                        (row["id"], episode.id, uid),
                     )
 
             for edge in edges:
@@ -244,12 +262,13 @@ class SqliteStore:
         transaction (used both by save_episode under one transaction
         and by add_edges below)."""
         self._conn.execute(
-            """INSERT INTO edges (id, from_entity, to_entity, verb, episode_id,
+            """INSERT INTO edges (id, user_id, from_entity, to_entity, verb, episode_id,
                                    t_event, t_ingestion, t_valid, t_invalid,
                                    attributes_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 edge.id,
+                edge.user_id,
                 edge.from_entity,
                 edge.to_entity,
                 edge.verb,
@@ -278,29 +297,43 @@ class SqliteStore:
         row = self._conn.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         return _episode_from_row(row) if row else None
 
-    def episodes_since(self, t: datetime, limit: int | None = None) -> list[Episode]:
-        sql = "SELECT * FROM episodes WHERE occurred_at >= ? ORDER BY occurred_at DESC"
-        params: list[object] = [_to_ms(t)]
+    def episodes_since(
+        self, t: datetime, *, user_id: str, limit: int | None = None
+    ) -> list[Episode]:
+        sql = (
+            "SELECT * FROM episodes WHERE user_id = ? AND occurred_at >= ? "
+            "ORDER BY occurred_at DESC"
+        )
+        params: list[object] = [user_id, _to_ms(t)]
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
     def episodes_between(
-        self, start: datetime, end: datetime, limit: int | None = None
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        user_id: str,
+        limit: int | None = None,
     ) -> list[Episode]:
         """Episodes with `occurred_at` in [start, end]. Inclusive on both ends."""
         sql = (
-            "SELECT * FROM episodes WHERE occurred_at >= ? AND occurred_at <= ? "
-            "ORDER BY occurred_at DESC"
+            "SELECT * FROM episodes WHERE user_id = ? AND occurred_at >= ? "
+            "AND occurred_at <= ? ORDER BY occurred_at DESC"
         )
-        params: list[object] = [_to_ms(start), _to_ms(end)]
+        params: list[object] = [user_id, _to_ms(start), _to_ms(end)]
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
-    def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]:
+    def episodes_mentioning(
+        self, entity_id: str, *, limit: int | None = None
+    ) -> list[Episode]:
+        # entity_id encodes user_id transitively (entities are user-scoped),
+        # so we don't need an explicit user_id filter here.
         sql = (
             "SELECT e.* FROM episodes e "
             "JOIN entity_episode_mention m ON m.episode_id = e.id "
@@ -314,12 +347,12 @@ class SqliteStore:
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
     def episodes_mentioning_any(
-        self, entity_ids: list[str], limit: int | None = None
+        self, entity_ids: list[str], *, limit: int | None = None
     ) -> list[Episode]:
         """Episodes that mention ANY of the given entities. Used by the
         ``_EntityQuery.episodes()`` pivot — given a set of matched entities,
         return episodes that mention any one of them, deduplicated and
-        reverse-chronological."""
+        reverse-chronological. user_id is implicit via the entity rows."""
         if not entity_ids:
             return []
         placeholders = ",".join("?" * len(entity_ids))
@@ -337,26 +370,30 @@ class SqliteStore:
 
     # --- entity reads ---
 
-    def find_entity(self, type_: str, key: str) -> EntityT | None:
+    def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         row = self._conn.execute(
-            "SELECT * FROM entities WHERE type = ? AND key = ?", (type_, key)
+            "SELECT * FROM entities WHERE user_id = ? AND type = ? AND key = ?",
+            (user_id, type_, key),
         ).fetchone()
         return _entity_from_row(row) if row else None
 
-    def find_entity_id(self, type_: str, key: str) -> str | None:
+    def find_entity_id(self, type_: str, key: str, *, user_id: str) -> str | None:
         row = self._conn.execute(
-            "SELECT id FROM entities WHERE type = ? AND key = ?", (type_, key)
+            "SELECT id FROM entities WHERE user_id = ? AND type = ? AND key = ?",
+            (user_id, type_, key),
         ).fetchone()
         return row["id"] if row else None
 
     def query_entities(
         self,
+        *,
+        user_id: str,
         type_: str | None = None,
         kind: str | None = None,
         key: str | None = None,
     ) -> list[EntityT]:
-        sql = "SELECT * FROM entities WHERE 1=1"
-        params: list[object] = []
+        sql = "SELECT * FROM entities WHERE user_id = ?"
+        params: list[object] = [user_id]
         if type_ is not None:
             sql += " AND type = ?"
             params.append(type_)
@@ -377,10 +414,15 @@ class SqliteStore:
                 (_to_ms(t_invalid), edge_id),
             )
 
-    def edges_as_of(self, t: datetime, *, verb: str | None = None) -> list[Edge]:
+    def edges_as_of(
+        self, t: datetime, *, user_id: str, verb: str | None = None
+    ) -> list[Edge]:
         ms = _to_ms(t)
-        sql = "SELECT * FROM edges WHERE t_valid <= ? AND (t_invalid IS NULL OR ? < t_invalid)"
-        params: list[object] = [ms, ms]
+        sql = (
+            "SELECT * FROM edges WHERE user_id = ? AND t_valid <= ? "
+            "AND (t_invalid IS NULL OR ? < t_invalid)"
+        )
+        params: list[object] = [user_id, ms, ms]
         if verb is not None:
             sql += " AND verb = ?"
             params.append(verb)
@@ -495,6 +537,7 @@ class SqliteStore:
     def query_tasks(
         self,
         *,
+        user_id: str,
         status: str | None = None,
         priority: str | None = None,
         gtd_context: str | None = None,
@@ -502,8 +545,8 @@ class SqliteStore:
         deadline_after: datetime | None = None,
     ) -> list[Episode]:
         """Filter task-kind episodes by lifecycle attributes."""
-        sql = "SELECT * FROM episodes WHERE kind = 'task'"
-        params: list[object] = []
+        sql = "SELECT * FROM episodes WHERE user_id = ? AND kind = 'task'"
+        params: list[object] = [user_id]
         if status is not None:
             sql += " AND status = ?"
             params.append(status)

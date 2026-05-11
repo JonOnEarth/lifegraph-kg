@@ -41,6 +41,7 @@ SCHEMA_SQL = [
     """\
 CREATE TABLE IF NOT EXISTS episodes (
   id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
   text          TEXT NOT NULL,
   occurred_at   BIGINT NOT NULL,
   ingested_at   BIGINT NOT NULL,
@@ -61,9 +62,12 @@ CREATE TABLE IF NOT EXISTS episodes (
     "CREATE INDEX IF NOT EXISTS idx_episodes_occurred_at ON episodes(occurred_at)",
     "CREATE INDEX IF NOT EXISTS idx_episodes_kind_status ON episodes(kind, status)",
     "CREATE INDEX IF NOT EXISTS idx_episodes_deadline ON episodes(deadline)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_user_id ON episodes(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_episodes_user_occurred ON episodes(user_id, occurred_at DESC)",
     """\
 CREATE TABLE IF NOT EXISTS entities (
   id              TEXT PRIMARY KEY,
+  user_id         TEXT NOT NULL,
   type            TEXT NOT NULL,
   kind            TEXT,
   key             TEXT NOT NULL,
@@ -71,14 +75,16 @@ CREATE TABLE IF NOT EXISTS entities (
   attributes_json TEXT NOT NULL DEFAULT '{}',
   created_at      BIGINT NOT NULL,
   canonical_id    TEXT REFERENCES entities(id),
-  UNIQUE(type, key)
+  UNIQUE(user_id, type, key)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)",
     "CREATE INDEX IF NOT EXISTS idx_entities_kind ON entities(kind)",
     "CREATE INDEX IF NOT EXISTS idx_entities_canonical_id ON entities(canonical_id)",
+    "CREATE INDEX IF NOT EXISTS idx_entities_user_id ON entities(user_id)",
     """\
 CREATE TABLE IF NOT EXISTS edges (
   id            TEXT PRIMARY KEY,
+  user_id       TEXT NOT NULL,
   from_entity   TEXT REFERENCES entities(id),
   to_entity     TEXT NOT NULL REFERENCES entities(id),
   verb          TEXT NOT NULL,
@@ -94,12 +100,16 @@ CREATE TABLE IF NOT EXISTS edges (
     "CREATE INDEX IF NOT EXISTS idx_edges_episode ON edges(episode_id)",
     "CREATE INDEX IF NOT EXISTS idx_edges_t_valid ON edges(t_valid)",
     "CREATE INDEX IF NOT EXISTS idx_edges_verb ON edges(verb)",
+    "CREATE INDEX IF NOT EXISTS idx_edges_user_id ON edges(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_edges_user_episode ON edges(user_id, episode_id)",
     """\
 CREATE TABLE IF NOT EXISTS entity_episode_mention (
   entity_id   TEXT NOT NULL REFERENCES entities(id),
   episode_id  TEXT NOT NULL REFERENCES episodes(id),
+  user_id     TEXT NOT NULL,
   PRIMARY KEY (entity_id, episode_id)
 )""",
+    "CREATE INDEX IF NOT EXISTS idx_eem_user_id ON entity_episode_mention(user_id)",
     """\
 CREATE TABLE IF NOT EXISTS merge_proposals (
   id            TEXT PRIMARY KEY,
@@ -133,9 +143,13 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
+_LEGACY_USER = ""
+
+
 def _entity_from_row(row: dict[str, Any]) -> EntityT:
     type_ = row["type"]
     common = {
+        "user_id": row.get("user_id") or _LEGACY_USER,
         "key": row["key"],
         "value": row["value"],
         "attributes": json.loads(row["attributes_json"] or "{}"),
@@ -158,6 +172,7 @@ def _episode_from_row(row: dict[str, Any]) -> Episode:
     assert ingested_at is not None
     return Episode(
         id=row["id"],
+        user_id=row.get("user_id") or _LEGACY_USER,
         text=row["text"],
         occurred_at=occurred_at,
         ingested_at=ingested_at,
@@ -186,6 +201,7 @@ def _edge_from_row(row: dict[str, Any]) -> Edge:
     assert t_valid is not None
     return Edge(
         id=row["id"],
+        user_id=row.get("user_id") or _LEGACY_USER,
         from_entity=row["from_entity"],
         to_entity=row["to_entity"],
         verb=row["verb"],
@@ -233,17 +249,19 @@ class PostgresStore:
         entities: list[Any],
         edges: list[Edge],
     ) -> None:
+        uid = episode.user_id
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO episodes
-                     (id, text, occurred_at, ingested_at, source,
+                     (id, user_id, text, occurred_at, ingested_at, source,
                       predicates, body_state, sentiment, energy,
                       kind, status, priority, deadline, completed_at,
                       recurrence, gtd_context, action_verb)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
-                           %s, %s, %s, %s, %s, %s, %s, %s)""",
+                           %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     episode.id,
+                    uid,
                     episode.text,
                     _to_ms(episode.occurred_at),
                     _to_ms(episode.ingested_at),
@@ -265,11 +283,12 @@ class PostgresStore:
             for entity in entities:
                 cur.execute(
                     """INSERT INTO entities
-                         (id, type, kind, key, value, attributes_json, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)
-                       ON CONFLICT (type, key) DO NOTHING""",
+                         (id, user_id, type, kind, key, value, attributes_json, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (user_id, type, key) DO NOTHING""",
                     (
                         _new_id(),
+                        uid,
                         entity.type,
                         getattr(entity, "kind", None),
                         entity.key,
@@ -279,15 +298,15 @@ class PostgresStore:
                     ),
                 )
                 cur.execute(
-                    "SELECT id FROM entities WHERE type = %s AND key = %s",
-                    (entity.type, entity.key),
+                    "SELECT id FROM entities WHERE user_id = %s AND type = %s AND key = %s",
+                    (uid, entity.type, entity.key),
                 )
                 row = cur.fetchone()
                 if row is not None:
                     cur.execute(
-                        """INSERT INTO entity_episode_mention (entity_id, episode_id)
-                           VALUES (%s, %s) ON CONFLICT DO NOTHING""",
-                        (row["id"], episode.id),
+                        """INSERT INTO entity_episode_mention (entity_id, episode_id, user_id)
+                           VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                        (row["id"], episode.id, uid),
                     )
 
             for edge in edges:
@@ -297,11 +316,12 @@ class PostgresStore:
     def _insert_edge(self, cur: Any, edge: Edge) -> None:
         cur.execute(
             """INSERT INTO edges
-                 (id, from_entity, to_entity, verb, episode_id,
+                 (id, user_id, from_entity, to_entity, verb, episode_id,
                   t_event, t_ingestion, t_valid, t_invalid, attributes_json)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '{}')""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '{}')""",
             (
                 edge.id,
+                edge.user_id,
                 edge.from_entity,
                 edge.to_entity,
                 edge.verb,
@@ -329,9 +349,14 @@ class PostgresStore:
             row = cur.fetchone()
         return _episode_from_row(row) if row else None
 
-    def episodes_since(self, t: datetime, limit: int | None = None) -> list[Episode]:
-        sql = "SELECT * FROM episodes WHERE occurred_at >= %s ORDER BY occurred_at DESC"
-        params: list[Any] = [_to_ms(t)]
+    def episodes_since(
+        self, t: datetime, *, user_id: str, limit: int | None = None
+    ) -> list[Episode]:
+        sql = (
+            "SELECT * FROM episodes WHERE user_id = %s AND occurred_at >= %s "
+            "ORDER BY occurred_at DESC"
+        )
+        params: list[Any] = [user_id, _to_ms(t)]
         if limit is not None:
             sql += " LIMIT %s"
             params.append(limit)
@@ -340,14 +365,19 @@ class PostgresStore:
             return [_episode_from_row(r) for r in cur.fetchall()]
 
     def episodes_between(
-        self, start: datetime, end: datetime, limit: int | None = None
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        user_id: str,
+        limit: int | None = None,
     ) -> list[Episode]:
         sql = (
             "SELECT * FROM episodes "
-            "WHERE occurred_at >= %s AND occurred_at <= %s "
+            "WHERE user_id = %s AND occurred_at >= %s AND occurred_at <= %s "
             "ORDER BY occurred_at DESC"
         )
-        params: list[Any] = [_to_ms(start), _to_ms(end)]
+        params: list[Any] = [user_id, _to_ms(start), _to_ms(end)]
         if limit is not None:
             sql += " LIMIT %s"
             params.append(limit)
@@ -355,7 +385,9 @@ class PostgresStore:
             cur.execute(sql, params)
             return [_episode_from_row(r) for r in cur.fetchall()]
 
-    def episodes_mentioning(self, entity_id: str, limit: int | None = None) -> list[Episode]:
+    def episodes_mentioning(
+        self, entity_id: str, *, limit: int | None = None
+    ) -> list[Episode]:
         sql = (
             "SELECT e.* FROM episodes e "
             "JOIN entity_episode_mention m ON m.episode_id = e.id "
@@ -371,7 +403,7 @@ class PostgresStore:
             return [_episode_from_row(r) for r in cur.fetchall()]
 
     def episodes_mentioning_any(
-        self, entity_ids: list[str], limit: int | None = None
+        self, entity_ids: list[str], *, limit: int | None = None
     ) -> list[Episode]:
         if not entity_ids:
             return []
@@ -391,32 +423,34 @@ class PostgresStore:
 
     # --- entity reads ---
 
-    def find_entity(self, type_: str, key: str) -> EntityT | None:
+    def find_entity(self, type_: str, key: str, *, user_id: str) -> EntityT | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT * FROM entities WHERE type = %s AND key = %s",
-                (type_, key),
+                "SELECT * FROM entities WHERE user_id = %s AND type = %s AND key = %s",
+                (user_id, type_, key),
             )
             row = cur.fetchone()
         return _entity_from_row(row) if row else None
 
-    def find_entity_id(self, type_: str, key: str) -> str | None:
+    def find_entity_id(self, type_: str, key: str, *, user_id: str) -> str | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id FROM entities WHERE type = %s AND key = %s",
-                (type_, key),
+                "SELECT id FROM entities WHERE user_id = %s AND type = %s AND key = %s",
+                (user_id, type_, key),
             )
             row = cur.fetchone()
         return row["id"] if row else None
 
     def query_entities(
         self,
+        *,
+        user_id: str,
         type_: str | None = None,
         kind: str | None = None,
         key: str | None = None,
     ) -> list[EntityT]:
-        sql = "SELECT * FROM entities WHERE 1=1"
-        params: list[Any] = []
+        sql = "SELECT * FROM entities WHERE user_id = %s"
+        params: list[Any] = [user_id]
         if type_ is not None:
             sql += " AND type = %s"
             params.append(type_)
@@ -440,10 +474,15 @@ class PostgresStore:
             )
         self._conn.commit()
 
-    def edges_as_of(self, t: datetime, *, verb: str | None = None) -> list[Edge]:
+    def edges_as_of(
+        self, t: datetime, *, user_id: str, verb: str | None = None
+    ) -> list[Edge]:
         ms = _to_ms(t)
-        sql = "SELECT * FROM edges WHERE t_valid <= %s AND (t_invalid IS NULL OR %s < t_invalid)"
-        params: list[Any] = [ms, ms]
+        sql = (
+            "SELECT * FROM edges WHERE user_id = %s AND t_valid <= %s "
+            "AND (t_invalid IS NULL OR %s < t_invalid)"
+        )
+        params: list[Any] = [user_id, ms, ms]
         if verb is not None:
             sql += " AND verb = %s"
             params.append(verb)
@@ -559,14 +598,15 @@ class PostgresStore:
     def query_tasks(
         self,
         *,
+        user_id: str,
         status: str | None = None,
         priority: str | None = None,
         gtd_context: str | None = None,
         deadline_before: datetime | None = None,
         deadline_after: datetime | None = None,
     ) -> list[Episode]:
-        sql = "SELECT * FROM episodes WHERE kind = 'task'"
-        params: list[Any] = []
+        sql = "SELECT * FROM episodes WHERE user_id = %s AND kind = 'task'"
+        params: list[Any] = [user_id]
         if status is not None:
             sql += " AND status = %s"
             params.append(status)

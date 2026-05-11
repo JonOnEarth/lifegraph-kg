@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for the eval scoring functions themselves.
 
+
 These tests run without the library — they exercise the pure-logic
 scoring functions on hand-built inputs. They guard against eval
 regressions when scoring code changes.
@@ -44,6 +45,8 @@ from tests.eval.types import (
     Span,
     TemporalQuery,
 )
+
+TEST_USER = "test-user"
 
 # ----- extraction -----
 
@@ -122,7 +125,7 @@ def _edge(
     t_invalid: str | None = None,
 ) -> Edge:
     return Edge(
-        type=pred,
+        user_id=TEST_USER, type=pred,
         from_entity=("Person", "sara"),
         to_entity=("Place", obj),
         t_event=_ts(t_valid),
