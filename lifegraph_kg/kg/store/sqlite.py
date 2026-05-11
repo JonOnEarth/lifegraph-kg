@@ -577,6 +577,109 @@ class SqliteStore:
         )
         return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
 
+    # --- mutation + bulk-list (Phase 7) ---
+
+    def update_episode(
+        self,
+        episode_id: str,
+        *,
+        text: str | None = None,
+        sentiment: str | None = None,
+        energy: str | None = None,
+        body_state: str | None = None,
+        priority: str | None = None,
+        deadline: datetime | None = None,
+        recurrence: str | None = None,
+        gtd_context: str | None = None,
+        action_verb: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Patch an episode. Only non-None fields update. Caller owns
+        the auth check — we trust the episode_id at this layer."""
+        sets: list[str] = []
+        params: list[object] = []
+        if text is not None:
+            sets.append("text = ?")
+            params.append(text)
+        if sentiment is not None:
+            sets.append("sentiment = ?")
+            params.append(sentiment)
+        if energy is not None:
+            sets.append("energy = ?")
+            params.append(energy)
+        if body_state is not None:
+            sets.append("body_state = ?")
+            params.append(body_state)
+        if priority is not None:
+            sets.append("priority = ?")
+            params.append(priority)
+        if deadline is not None:
+            sets.append("deadline = ?")
+            params.append(_to_ms(deadline))
+        if recurrence is not None:
+            sets.append("recurrence = ?")
+            params.append(recurrence)
+        if gtd_context is not None:
+            sets.append("gtd_context = ?")
+            params.append(gtd_context)
+        if action_verb is not None:
+            sets.append("action_verb = ?")
+            params.append(action_verb)
+        if source is not None:
+            sets.append("source = ?")
+            params.append(source)
+        if not sets:
+            return
+        params.append(episode_id)
+        with self._conn:
+            self._conn.execute(
+                f"UPDATE episodes SET {', '.join(sets)} WHERE id = ?", params
+            )
+
+    def delete_episode(self, episode_id: str) -> None:
+        """Cascade-delete an episode + its edges + its mentions. Entities
+        survive (other episodes may reference them)."""
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM entity_episode_mention WHERE episode_id = ?",
+                (episode_id,),
+            )
+            self._conn.execute(
+                "DELETE FROM edges WHERE episode_id = ?", (episode_id,)
+            )
+            self._conn.execute(
+                "DELETE FROM episodes WHERE id = ?", (episode_id,)
+            )
+
+    def list_episodes(
+        self,
+        *,
+        user_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Episode]:
+        """Paginated, filtered episode list for ``user_id``."""
+        sql = "SELECT * FROM episodes WHERE user_id = ?"
+        params: list[object] = [user_id]
+        if kind is not None:
+            sql += " AND kind = ?"
+            params.append(kind)
+        if status is not None:
+            sql += " AND status = ?"
+            params.append(status)
+        if since is not None:
+            sql += " AND occurred_at >= ?"
+            params.append(_to_ms(since))
+        sql += " ORDER BY occurred_at DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.append(limit)
+            params.append(offset)
+        return [_episode_from_row(r) for r in self._conn.execute(sql, params)]
+
     # --- introspection ---
 
     def close(self) -> None:

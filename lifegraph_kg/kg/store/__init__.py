@@ -122,3 +122,40 @@ class Store(Protocol):
         deadline_before: datetime | None = None,
         deadline_after: datetime | None = None,
     ) -> list[Episode]: ...
+
+    # --- Mutation + bulk-list (Phase 7) ---
+
+    def update_episode(
+        self,
+        episode_id: str,
+        *,
+        text: str | None = None,
+        sentiment: str | None = None,
+        energy: str | None = None,
+        body_state: str | None = None,
+        priority: str | None = None,
+        deadline: datetime | None = None,
+        recurrence: str | None = None,
+        gtd_context: str | None = None,
+        action_verb: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Patch an existing episode in place. Only fields explicitly
+        provided (non-None) are updated. ID encodes user_id via the row."""
+
+    def delete_episode(self, episode_id: str) -> None:
+        """Delete an episode + its edges + mentions. Entities survive
+        (they may be referenced by other episodes). ID encodes user_id."""
+
+    def list_episodes(
+        self,
+        *,
+        user_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Episode]:
+        """Bulk-list episodes for a user with optional kind/status/since
+        filters. Used by the frontend sync route. Most-recent first."""

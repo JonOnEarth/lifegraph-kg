@@ -588,5 +588,100 @@ class RestStore:
         q["order"] = "deadline.asc.nullslast,occurred_at.desc"
         return [_episode_from_row(r) for r in self._get("/episodes", **q)]
 
+    # --- mutation + bulk-list (Phase 7) ---
+
+    def update_episode(
+        self,
+        episode_id: str,
+        *,
+        text: str | None = None,
+        sentiment: str | None = None,
+        energy: str | None = None,
+        body_state: str | None = None,
+        priority: str | None = None,
+        deadline: datetime | None = None,
+        recurrence: str | None = None,
+        gtd_context: str | None = None,
+        action_verb: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        body: dict[str, Any] = {}
+        if text is not None:
+            body["text"] = text
+        if sentiment is not None:
+            body["sentiment"] = sentiment
+        if energy is not None:
+            body["energy"] = energy
+        if body_state is not None:
+            body["body_state"] = body_state
+        if priority is not None:
+            body["priority"] = priority
+        if deadline is not None:
+            body["deadline"] = _to_ms(deadline)
+        if recurrence is not None:
+            body["recurrence"] = recurrence
+        if gtd_context is not None:
+            body["gtd_context"] = gtd_context
+        if action_verb is not None:
+            body["action_verb"] = action_verb
+        if source is not None:
+            body["source"] = source
+        if not body:
+            return
+        self._patch("/episodes", body, **{"id": f"eq.{episode_id}"})
+
+    def delete_episode(self, episode_id: str) -> None:
+        """Cascade-delete via three separate DELETEs (PostgREST has no
+        transaction across endpoints; we accept eventual-consistency in
+        the rare interrupt-mid-delete case)."""
+        # Mentions first (no FK fan-out), then edges (reference episode),
+        # then the episode itself.
+        h = {**self._headers, "Prefer": "return=minimal"}
+        for path in ("/entity_episode_mention", "/edges"):
+            r = self._client.delete(
+                self._base + path,
+                headers=h,
+                params={"episode_id": f"eq.{episode_id}"},
+            )
+            if r.status_code >= 300:
+                raise RuntimeError(
+                    f"DELETE {path} failed {r.status_code}: {r.text[:200]}"
+                )
+        r = self._client.delete(
+            self._base + "/episodes",
+            headers=h,
+            params={"id": f"eq.{episode_id}"},
+        )
+        if r.status_code >= 300:
+            raise RuntimeError(
+                f"DELETE /episodes failed {r.status_code}: {r.text[:200]}"
+            )
+
+    def list_episodes(
+        self,
+        *,
+        user_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Episode]:
+        q: dict[str, Any] = {
+            "user_id": f"eq.{user_id}",
+            "order": "occurred_at.desc",
+        }
+        if kind is not None:
+            q["kind"] = f"eq.{kind}"
+        if status is not None:
+            q["status"] = f"eq.{status}"
+        if since is not None:
+            q["occurred_at"] = f"gte.{_to_ms(since)}"
+        if limit is not None:
+            q["limit"] = str(limit)
+        if offset:
+            q["offset"] = str(offset)
+        return [_episode_from_row(r) for r in self._get("/episodes", **q)]
+
     def close(self) -> None:
         self._client.close()

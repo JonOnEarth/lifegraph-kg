@@ -634,6 +634,108 @@ class PostgresStore:
             cur.execute(sql, params)
             return [_episode_from_row(r) for r in cur.fetchall()]
 
+    # --- mutation + bulk-list (Phase 7) ---
+
+    def update_episode(
+        self,
+        episode_id: str,
+        *,
+        text: str | None = None,
+        sentiment: str | None = None,
+        energy: str | None = None,
+        body_state: str | None = None,
+        priority: str | None = None,
+        deadline: datetime | None = None,
+        recurrence: str | None = None,
+        gtd_context: str | None = None,
+        action_verb: str | None = None,
+        source: str | None = None,
+    ) -> None:
+        sets: list[str] = []
+        params: list[Any] = []
+        if text is not None:
+            sets.append("text = %s")
+            params.append(text)
+        if sentiment is not None:
+            sets.append("sentiment = %s")
+            params.append(sentiment)
+        if energy is not None:
+            sets.append("energy = %s")
+            params.append(energy)
+        if body_state is not None:
+            sets.append("body_state = %s")
+            params.append(body_state)
+        if priority is not None:
+            sets.append("priority = %s")
+            params.append(priority)
+        if deadline is not None:
+            sets.append("deadline = %s")
+            params.append(_to_ms(deadline))
+        if recurrence is not None:
+            sets.append("recurrence = %s")
+            params.append(recurrence)
+        if gtd_context is not None:
+            sets.append("gtd_context = %s")
+            params.append(gtd_context)
+        if action_verb is not None:
+            sets.append("action_verb = %s")
+            params.append(action_verb)
+        if source is not None:
+            sets.append("source = %s")
+            params.append(source)
+        if not sets:
+            return
+        params.append(episode_id)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE episodes SET {', '.join(sets)} WHERE id = %s", params
+            )
+        self._conn.commit()
+
+    def delete_episode(self, episode_id: str) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM entity_episode_mention WHERE episode_id = %s",
+                (episode_id,),
+            )
+            cur.execute(
+                "DELETE FROM edges WHERE episode_id = %s", (episode_id,)
+            )
+            cur.execute(
+                "DELETE FROM episodes WHERE id = %s", (episode_id,)
+            )
+        self._conn.commit()
+
+    def list_episodes(
+        self,
+        *,
+        user_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Episode]:
+        sql = "SELECT * FROM episodes WHERE user_id = %s"
+        params: list[Any] = [user_id]
+        if kind is not None:
+            sql += " AND kind = %s"
+            params.append(kind)
+        if status is not None:
+            sql += " AND status = %s"
+            params.append(status)
+        if since is not None:
+            sql += " AND occurred_at >= %s"
+            params.append(_to_ms(since))
+        sql += " ORDER BY occurred_at DESC"
+        if limit is not None:
+            sql += " LIMIT %s OFFSET %s"
+            params.append(limit)
+            params.append(offset)
+        with self._conn.cursor() as cur:
+            cur.execute(sql, params)
+            return [_episode_from_row(r) for r in cur.fetchall()]
+
     # --- introspection ---
 
     def close(self) -> None:

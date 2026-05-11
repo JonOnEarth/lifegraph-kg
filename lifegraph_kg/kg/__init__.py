@@ -124,6 +124,45 @@ class _EpisodeView:
             return self._store.episodes_mentioning(ent_id, limit=limit)
         return self._store.episodes_mentioning(entity, limit=limit)
 
+    def list_for(
+        self,
+        *,
+        user_id: str,
+        kind: str | None = None,
+        status: str | None = None,
+        since: datetime | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Episode]:
+        """Paginated, filtered list of episodes scoped to ``user_id``.
+        The frontend's /api/sync route calls this to fetch the user's
+        full history (or recent slice)."""
+        return self._store.list_episodes(
+            user_id=user_id,
+            kind=kind,
+            status=status,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
+
+    def update(
+        self,
+        episode_id: str,
+        **fields,
+    ) -> None:
+        """Patch fields on an existing episode (text, sentiment, energy,
+        body_state, priority, deadline, recurrence, gtd_context,
+        action_verb, source). Pass only the fields you want to change.
+        The auth check (does this user own this episode?) lives at the
+        ai-service route boundary, not here."""
+        self._store.update_episode(episode_id, **fields)
+
+    def delete(self, episode_id: str) -> None:
+        """Cascade-delete an episode + its edges + mentions. Entities
+        survive (they may be referenced by other episodes)."""
+        self._store.delete_episode(episode_id)
+
 
 class _EntityQuery:
     """Result of `lg.query(Type, **filters)`. Supports `.one()` and `.all()`.
