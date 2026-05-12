@@ -20,6 +20,7 @@ from lifegraph_kg.classes import Person, Place, Project, Topic
 from lifegraph_kg.extract import extract
 from lifegraph_kg.extract.schema import ExtractionResult
 from lifegraph_kg.kg import LifeGraph
+from lifegraph_kg.kg.scheduler import compute_next_fire_utc
 
 try:
     __version__ = version("lifegraph-kg")
@@ -36,5 +37,6 @@ __all__ = [
     "Topic",
     "__version__",
     "classes",
+    "compute_next_fire_utc",
     "extract",
 ]
